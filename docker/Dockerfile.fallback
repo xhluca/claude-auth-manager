@@ -1,0 +1,4 @@
+FROM claude-auth-manager-ui-test:local
+RUN python -m pip install --no-cache-dir pytest pexpect pyte
+ENV PYTHONPATH=/src/src:/src/tests
+WORKDIR /src

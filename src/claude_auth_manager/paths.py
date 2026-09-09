@@ -1,0 +1,130 @@
+"""Filesystem locations used by claude-auth-manager.
+
+Secret-bearing paths deliberately live outside Claude Code's configuration.
+Only the loopback token is written to ``~/.claude/settings.json``.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+APP_NAME = "claude-auth-manager"
+
+
+def config_dir() -> Path:
+    root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return root / APP_NAME
+
+
+def cache_dir() -> Path:
+    root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return root / APP_NAME
+
+
+def state_dir() -> Path:
+    root = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+    return root / APP_NAME
+
+
+def claude_config_dir() -> Path:
+    override = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(override).expanduser() if override else Path.home() / ".claude"
+
+
+def claude_settings_path() -> Path:
+    return claude_config_dir() / "settings.json"
+
+
+def claude_agents_dir() -> Path:
+    return claude_config_dir() / "agents"
+
+
+def credential_path() -> Path:
+    """Legacy single OpenRouter credential path (0.4.x compatibility)."""
+    return config_dir() / "credential"
+
+
+def anthropic_credential_path() -> Path:
+    """Legacy single Anthropic API credential path."""
+    return config_dir() / "anthropic-credential"
+
+
+def registry_path() -> Path:
+    return config_dir() / "registry.json"
+
+
+def accounts_dir() -> Path:
+    return config_dir() / "accounts"
+
+
+def account_config_dir(account_id: str) -> Path:
+    return accounts_dir() / account_id
+
+
+def account_credential_path(account_id: str) -> Path:
+    return account_config_dir(account_id) / ".credentials.json"
+
+
+def provider_keys_dir() -> Path:
+    return config_dir() / "keys"
+
+
+def provider_credential_path(provider: str, key_id: str) -> Path:
+    return provider_keys_dir() / provider / key_id
+
+
+def router_token_path() -> Path:
+    return config_dir() / "router-token"
+
+
+def launch_settings_path() -> Path:
+    return config_dir() / "claude-settings.json"
+
+
+def helper_path() -> Path:
+    return config_dir() / "api-key-helper.sh"
+
+
+def preferences_path() -> Path:
+    return config_dir() / "config.json"
+
+
+def agent_manifest_path() -> Path:
+    return config_dir() / "subagents.json"
+
+
+def catalog_path(provider: str = "openrouter", key_id: str = "default") -> Path:
+    """Return one credential-scoped catalog path.
+
+    The legacy location is retained for the default OpenRouter key so copied
+    installations and tests can migrate without a network refresh.
+    """
+    if provider == "openrouter" and key_id == "default":
+        return cache_dir() / "models.json"
+    return cache_dir() / "catalogs" / provider / f"{key_id}.json"
+
+
+def backup_path() -> Path:
+    return state_dir() / "claude-settings-backup.json"
+
+
+def router_pid_path() -> Path:
+    return state_dir() / "router.pid"
+
+
+def router_log_path() -> Path:
+    return state_dir() / "router.log"
+
+
+def router_status_path() -> Path:
+    return state_dir() / "router-status.json"
+
+
+def systemd_unit_path() -> Path:
+    root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return root / "systemd" / "user" / "claude-auth-manager.service"
+
+
+def launchd_plist_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / "io.github.xhluca.claude-auth-manager.plist"

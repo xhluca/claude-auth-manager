@@ -1,0 +1,142 @@
+#!/bin/sh
+# POSIX user-level installer for Claude Auth Manager.
+
+set -eu
+
+package_name="claude-auth-manager"
+package_version="0.0.1"
+wheel_name="claude_auth_manager-${package_version}-py3-none-any.whl"
+# Filled from the release artifact by scripts/build-release.sh.
+wheel_sha256="1abdb8a2b80a6c439c2af43e639bf497c21c719f8ef6593ee824ec8ab46a1998"
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Install Claude Auth Manager for the current user and run its guided setup.
+
+Usage:
+  sh install.sh [options]
+
+Run this script from an authenticated clone of the private claude-auth-manager
+repository. See README.md for private release downloads and installation.
+
+Options:
+  --install-only        Install the CLI without asking for a key or models.
+  --skip-claude-install Fail instead of installing Claude Code when it is missing.
+  -h, --help            Show this help.
+
+The installer never accepts credentials as command-line arguments. Guided setup
+registers the current Claude login; add provider keys afterward with `cam key add`.
+EOF
+}
+
+install_only=0
+skip_claude_install=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --install-only) install_only=1; shift ;;
+    --skip-claude-install) skip_claude_install=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown option: $1 (run with --help)" ;;
+  esac
+done
+
+script_dir=""
+case "$0" in
+  */*) script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P) || script_dir='' ;;
+  *)
+    if [ -f "./$0" ]; then
+      script_dir=$(pwd -P)
+    fi
+    ;;
+esac
+
+wheel_path=""
+
+verify_wheel() {
+  checked_wheel=$1
+  [ "$wheel_sha256" != "TO_BE_REPLACED" ] || die "release checksum is not configured"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual_sha256=$(sha256sum "$checked_wheel" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    actual_sha256=$(shasum -a 256 "$checked_wheel" | awk '{print $1}')
+  elif command -v openssl >/dev/null 2>&1; then
+    actual_sha256=$(openssl dgst -sha256 "$checked_wheel" | awk '{print $NF}')
+  else
+    die "sha256sum, shasum, or openssl is required to verify the release"
+  fi
+  [ "$actual_sha256" = "$wheel_sha256" ] || die "release checksum mismatch"
+  printf 'Verified local release checksum.\n'
+}
+
+local_source=""
+if [ -n "$script_dir" ] && [ -f "$script_dir/pyproject.toml" ]; then
+  local_source="$script_dir"
+fi
+if [ -n "$script_dir" ] && [ -f "$script_dir/dist/$wheel_name" ]; then
+  wheel_path="$script_dir/dist/$wheel_name"
+  verify_wheel "$wheel_path"
+fi
+[ -n "$local_source" ] || die "run install.sh from a claude-auth-manager source checkout"
+install_target=${wheel_path:-$local_source}
+
+if ! command -v claude >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/claude" ]; then
+  [ "$skip_claude_install" -eq 0 ] || die "Claude Code is not installed"
+  command -v curl >/dev/null 2>&1 || die "curl is required to install Claude Code"
+  printf 'Installing Claude Code from its official installer...\n'
+  curl -fsSL https://claude.ai/install.sh | bash
+fi
+
+printf 'Installing %s %s for user %s...\n' "$package_name" "$package_version" "$(id -un)"
+installed_command=""
+
+if command -v uv >/dev/null 2>&1; then
+  uv tool install --force --link-mode copy "$install_target"
+  uv_bin_dir="${UV_TOOL_BIN_DIR:-$HOME/.local/bin}"
+  if [ -x "$uv_bin_dir/claude-auth-manager" ]; then
+    installed_command="$uv_bin_dir/claude-auth-manager"
+  elif command -v claude-auth-manager >/dev/null 2>&1; then
+    installed_command=$(command -v claude-auth-manager)
+  fi
+else
+  python="${PYTHON:-python3}"
+  command -v "$python" >/dev/null 2>&1 || die "Python 3.10+ or uv is required"
+  "$python" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' || \
+    die "Python 3.10 or newer is required"
+  data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+  bin_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
+  install_dir="${CLAUDE_AUTH_MANAGER_TOOL_DIR:-$data_home/claude-auth-manager/tool}"
+  mkdir -p -- "$install_dir" "$bin_dir"
+  for destination in "$bin_dir/claude-auth-manager" "$bin_dir/cam"; do
+    if [ -e "$destination" ] && [ ! -L "$destination" ]; then
+      die "refusing to replace existing file: $destination"
+    fi
+  done
+  "$python" -m venv "$install_dir"
+  "$install_dir/bin/python" -m pip install --disable-pip-version-check --force-reinstall \
+    "$install_target"
+  ln -sfn -- "$install_dir/bin/claude-auth-manager" "$bin_dir/claude-auth-manager"
+  ln -sfn -- "$install_dir/bin/cam" "$bin_dir/cam"
+  installed_command="$bin_dir/claude-auth-manager"
+fi
+
+[ -n "$installed_command" ] && [ -x "$installed_command" ] || \
+  die "installation completed but claude-auth-manager was not found"
+printf 'Installed commands: %s and cam\n' "$installed_command"
+
+if [ "$install_only" -eq 1 ]; then
+  printf 'Installation complete. Run: %s account add --current\n' "$installed_command"
+  exit 0
+fi
+
+if [ -r /dev/tty ]; then
+  "$installed_command" account add --current </dev/tty
+else
+  die "account setup needs a terminal; rerun claude-auth-manager account add --current directly"
+fi
+
+printf '\nClaude Auth Manager is ready. Run: claude\n'
