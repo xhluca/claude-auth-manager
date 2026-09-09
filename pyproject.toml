@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-auth-manager"
-version = "0.0.1"
+version = "0.0.2"
 description = "Switch Claude subscriptions and API-provider keys from Claude Code"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,6 +26,11 @@ classifiers = [
   "Topic :: Software Development :: User Interfaces",
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/xhluca/claude-auth-manager"
+Repository = "https://github.com/xhluca/claude-auth-manager"
+Issues = "https://github.com/xhluca/claude-auth-manager/issues"
 
 [project.scripts]
 claude-auth-manager = "claude_auth_manager.cli:main"

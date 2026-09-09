@@ -18,49 +18,65 @@ use different routes and keys.
 
 ## Install
 
-Requirements: Python 3.10+, Claude Code, GitHub CLI (`gh`), and `uv`.
-
-This repository and its releases are **private**. Accept your repository invitation
-first, then authenticate `gh` with your own GitHub account that has access.
-Never put a GitHub token into an install URL or share another person's token.
-
-Install the pinned **0.0.1** release without cloning:
+Requirements: Python 3.10+ or `uv`. Claude Code is required to use CAM; the
+installer installs it from its official installer if Claude is missing.
 
 ```sh
-gh auth login
-mkdir -p cam-0.0.1
-cd cam-0.0.1
-gh release download v0.0.1 --repo xhluca/claude-auth-manager \
-  --pattern '*.whl' --pattern SHA256SUMS
-sha256sum --ignore-missing --check SHA256SUMS
-uv tool install --force --link-mode copy ./claude_auth_manager-0.0.1-py3-none-any.whl
-cam --version
+curl -fsSL https://raw.githubusercontent.com/xhluca/claude-auth-manager/main/install.sh | sh
+```
+
+The installer uses `uv tool install` when available. Otherwise it creates a private
+Python environment under `~/.local/share/claude-auth-manager/tool` and links `cam`
+and `claude-auth-manager` into `~/.local/bin`. It never uses sudo or modifies the
+system Python. PyPI is tried first; a checksum-pinned GitHub release wheel is the
+fallback if PyPI is unavailable. No GitHub login is required.
+
+The final setup step registers the currently logged-in Claude account. For agents,
+CI, or updating an existing setup without touching accounts or model choices:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xhluca/claude-auth-manager/main/install.sh \
+  | sh -s -- --install-only
+```
+
+Add `--skip-claude-install` to fail instead of installing a missing Claude Code.
+To inspect the script first, download it with `curl -fsSLO` and run
+`sh install.sh --install-only` after reviewing it.
+
+Prefer `uv` directly?
+
+```sh
+uv tool install claude-auth-manager
 cam account add --current
 ```
 
-On macOS, use `shasum -a 256 -c SHA256SUMS --ignore-missing` for the checksum check.
-The final command registers the currently logged-in Claude subscription and
-initializes its default route; omit it when updating an existing CAM setup.
-The wheel installs both `cam` and `claude-auth-manager`.
+For a pinned installation: `uv tool install 'claude-auth-manager==0.0.2'`.
+Ensure `~/.local/bin` is on your PATH (`uv tool update-shell` can help for uv installs).
 
-Alternatively, clone the private repository and use its guided installer:
+### Update, reset, and uninstall
 
 ```sh
-gh auth login
-gh repo clone xhluca/claude-auth-manager
-cd claude-auth-manager
-git checkout v0.0.1
-gh release download v0.0.1 --repo xhluca/claude-auth-manager \
-  --pattern '*.whl' --dir dist
-sh install.sh
+cam update
+cam reset
+cam uninstall
 ```
 
-Use `sh install.sh --install-only` to skip account setup. The installer verifies
-the wheel against its pinned checksum and never takes credentials as arguments.
-For private release updates, repeat the authenticated download/install procedure
-with the desired tag and wheel version. There is no public PyPI release or
-anonymous download URL. `cam update` currently targets a package registry, not
-private GitHub releases; use the authenticated procedure above for this release.
+`cam update` installs the latest stable PyPI version using the package manager
+that owns the running CAM installation (uv, pipx, or its private Python environment).
+It keeps accounts, keys, and selected models. Development checkouts are protected
+against replacement by an older registry version.
+
+`cam reset` stops the router, restores backed-up Claude settings, and deletes
+CAM's saved accounts, keys, catalogs, and state; the CLI stays installed.
+`cam uninstall` performs that reset and removes the owning uv/pipx/private-environment
+installation. It does not uninstall Claude Code or guess at removing a development
+or shared-system Python install. Export anything you need before reset/uninstall.
+
+Installer overrides: `CLAUDE_AUTH_MANAGER_PYPI_INDEX_URL` selects a package index;
+`CLAUDE_AUTH_MANAGER_INSTALL_BASE_URL` selects the fallback wheel directory
+(the pinned checksum still applies); `CLAUDE_AUTH_MANAGER_TOOL_DIR` selects the
+private environment; `XDG_BIN_HOME` selects its command-link directory. Standard
+`UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` and XDG data/config locations are respected.
 
 ## Add accounts and keys
 
@@ -543,6 +559,23 @@ credential as a real destination for a Claude Code Glob tool round-trip, with
 synthetic exhausted predecessors in a separate loopback router. It prints only
 redacted test results and leaves production routing choices unchanged. An expired
 credential is reported as blocked rather than counted as a successful live test.
+
+`uv run python scripts/test-install-lifecycle.py` checks the published curl
+installer, direct PyPI installation, checksum-verified GitHub fallback, update,
+and uninstall in disposable homes and tool stores. It uses no real Claude login
+and does not modify the caller's installed CAM or settings.
+
+### Publishing a release
+
+Update the version in `pyproject.toml`, `__init__.py`, `uv.lock`, and `install.sh`;
+run the tests, then `bash scripts/build-release.sh`. Copy the wheel's SHA-256 into
+`install.sh` and rebuild so the source archive includes the correct pin. Commit
+and tag the release, upload the wheel, source archive, and `SHA256SUMS` to GitHub,
+and publish the same package files with
+`uv run --with twine twine upload dist/*.whl dist/*.tar.gz`.
+Supply publishing credentials through your local PyPI configuration or a secure
+credential store, never repository files. Re-run the public lifecycle smoke test
+after publication. Published package versions must not be replaced.
 
 ## License
 

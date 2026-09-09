@@ -1,11 +1,72 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import re
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from claude_auth_manager import __version__
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("mode", ["pypi", "fallback", "bad-checksum"])
+def test_piped_installer_registry_and_verified_fallback(tmp_path, monkeypatch, mode):
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    log = tmp_path / "calls.jsonl"
+    uv = binary / "uv"
+    uv.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, sys\n"
+        "with open(os.environ['CAM_TEST_LOG'], 'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n"
+        "if '--default-index' in sys.argv and os.environ['CAM_TEST_MODE'] != 'pypi': sys.exit(1)\n"
+        "p = pathlib.Path(os.environ['UV_TOOL_BIN_DIR']) / 'claude-auth-manager'\n"
+        "p.write_text('#!/bin/sh\\nexit 0\\n'); p.chmod(0o755)\n"
+    )
+    uv.chmod(0o755)
+    claude = binary / "claude"
+    claude.write_text("#!/bin/sh\nexit 0\n")
+    claude.chmod(0o755)
+    wheel = tmp_path / f"claude_auth_manager-{__version__}-py3-none-any.whl"
+    wheel.write_bytes(b"synthetic package")
+    digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    script = (ROOT / "install.sh").read_text()
+    script = re.sub(r'wheel_sha256="[a-f0-9]+"', f'wheel_sha256="{digest}"', script)
+    if mode == "bad-checksum":
+        wheel.write_bytes(b"tampered")
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    for key, value in {
+        "PATH": str(binary) + os.pathsep + os.defpath,
+        "UV_TOOL_BIN_DIR": str(binary),
+        "CAM_TEST_LOG": str(log),
+        "CAM_TEST_MODE": mode,
+        "CLAUDE_AUTH_MANAGER_INSTALL_BASE_URL": tmp_path.as_uri(),
+        "TMPDIR": str(scratch),
+    }.items():
+        monkeypatch.setenv(key, value)
+    result = subprocess.run(
+        ["sh", "-s", "--", "--install-only", "--skip-claude-install"],
+        input=script,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert "--default-index" in calls[0]
+    if mode == "bad-checksum":
+        assert result.returncode != 0 and "checksum mismatch" in result.stderr
+        assert len(calls) == 1
+    else:
+        assert result.returncode == 0, result.stderr
+        assert len(calls) == (2 if mode == "fallback" else 1)
+    assert not list(scratch.iterdir())
 
 
 def test_shell_scripts_are_syntactically_valid() -> None:
@@ -40,17 +101,18 @@ def test_uv_installs_use_copy_mode_to_avoid_cross_filesystem_warnings() -> None:
     assert all("--link-mode copy" in command for command in commands)
 
 
-def test_private_installer_does_not_use_anonymous_downloads() -> None:
+def test_public_installer_supports_pypi_and_verified_release_fallback() -> None:
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
 
     assert "xhluca.github.io" not in installer
-    assert "github.com/xhluca/claude-auth-manager" not in installer
+    assert "github.com/xhluca/claude-auth-manager/releases/download/" in installer
     assert "install_target=${wheel_path:-$local_source}" in installer
-    assert "run install.sh from a claude-auth-manager source checkout" in installer
+    assert "prepare_fallback_wheel" in installer
+    assert "verify_wheel" in installer
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "gh release download v0.0.1 --repo xhluca/claude-auth-manager" in readme
-    assert "gh auth login" in readme
-    assert not (ROOT / ".github/workflows/publish.yml").exists()
+    assert "curl -fsSL https://raw.githubusercontent.com/xhluca/claude-auth-manager/" in readme
+    assert "uv tool install claude-auth-manager" in readme
+    assert "cam update" in readme and "cam uninstall" in readme
 
 
 def test_readme_documents_multi_account_multi_key_routes_and_reset() -> None:

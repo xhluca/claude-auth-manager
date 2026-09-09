@@ -4,10 +4,13 @@
 set -eu
 
 package_name="claude-auth-manager"
-package_version="0.0.1"
+package_version="0.0.2"
 wheel_name="claude_auth_manager-${package_version}-py3-none-any.whl"
 # Filled from the release artifact by scripts/build-release.sh.
-wheel_sha256="1abdb8a2b80a6c439c2af43e639bf497c21c719f8ef6593ee824ec8ab46a1998"
+wheel_sha256="552f859310f181e95dd1bff1f683e8f733b6e61f8a87b7d81b3145b1675a9670"
+pypi_index_url="${CLAUDE_AUTH_MANAGER_PYPI_INDEX_URL:-https://pypi.org/simple}"
+release_base_url="${CLAUDE_AUTH_MANAGER_INSTALL_BASE_URL:-https://github.com/xhluca/claude-auth-manager/releases/download/v${package_version}}"
+package_spec="${package_name}==${package_version}"
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -19,10 +22,8 @@ usage() {
 Install Claude Auth Manager for the current user and run its guided setup.
 
 Usage:
+  curl -fsSL https://raw.githubusercontent.com/xhluca/claude-auth-manager/main/install.sh | sh
   sh install.sh [options]
-
-Run this script from an authenticated clone of the private claude-auth-manager
-repository. See README.md for private release downloads and installation.
 
 Options:
   --install-only        Install the CLI without asking for a key or models.
@@ -55,7 +56,19 @@ case "$0" in
     ;;
 esac
 
+temporary_dir=""
+temporary_wheel=""
 wheel_path=""
+cleanup() {
+  if [ -n "$temporary_wheel" ] && [ -f "$temporary_wheel" ]; then
+    rm -f -- "$temporary_wheel"
+  fi
+  if [ -n "$temporary_dir" ] && [ -d "$temporary_dir" ]; then
+    rmdir -- "$temporary_dir" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+trap 'cleanup; exit 1' HUP INT TERM
 
 verify_wheel() {
   checked_wheel=$1
@@ -70,7 +83,23 @@ verify_wheel() {
     die "sha256sum, shasum, or openssl is required to verify the release"
   fi
   [ "$actual_sha256" = "$wheel_sha256" ] || die "release checksum mismatch"
-  printf 'Verified local release checksum.\n'
+  printf 'Verified release checksum.\n'
+}
+
+prepare_fallback_wheel() {
+  [ -z "$wheel_path" ] || return
+  temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/claude-auth-manager.XXXXXXXX")
+  temporary_wheel="$temporary_dir/$wheel_name"
+  printf 'Downloading checksum-pinned release for %s %s...\n' "$package_name" "$package_version"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 3 --output "$temporary_wheel" "$release_base_url/$wheel_name"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$temporary_wheel" "$release_base_url/$wheel_name"
+  else
+    die "curl or wget is required to download the release"
+  fi
+  wheel_path="$temporary_wheel"
+  verify_wheel "$wheel_path"
 }
 
 local_source=""
@@ -81,7 +110,6 @@ if [ -n "$script_dir" ] && [ -f "$script_dir/dist/$wheel_name" ]; then
   wheel_path="$script_dir/dist/$wheel_name"
   verify_wheel "$wheel_path"
 fi
-[ -n "$local_source" ] || die "run install.sh from a claude-auth-manager source checkout"
 install_target=${wheel_path:-$local_source}
 
 if ! command -v claude >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/claude" ]; then
@@ -95,7 +123,14 @@ printf 'Installing %s %s for user %s...\n' "$package_name" "$package_version" "$
 installed_command=""
 
 if command -v uv >/dev/null 2>&1; then
-  uv tool install --force --link-mode copy "$install_target"
+  if [ -n "$install_target" ]; then
+    uv tool install --force --link-mode copy "$install_target"
+  elif ! uv tool install --force --link-mode copy --refresh-package "$package_name" \
+    --default-index "$pypi_index_url" "$package_spec"; then
+    printf 'PyPI installation failed; using the verified release fallback.\n' >&2
+    prepare_fallback_wheel
+    uv tool install --force --link-mode copy "$wheel_path"
+  fi
   uv_bin_dir="${UV_TOOL_BIN_DIR:-$HOME/.local/bin}"
   if [ -x "$uv_bin_dir/claude-auth-manager" ]; then
     installed_command="$uv_bin_dir/claude-auth-manager"
@@ -117,8 +152,16 @@ else
     fi
   done
   "$python" -m venv "$install_dir"
-  "$install_dir/bin/python" -m pip install --disable-pip-version-check --force-reinstall \
-    "$install_target"
+  if [ -n "$install_target" ]; then
+    "$install_dir/bin/python" -m pip install --disable-pip-version-check --force-reinstall \
+      "$install_target"
+  elif ! "$install_dir/bin/python" -m pip install --disable-pip-version-check \
+    --index-url "$pypi_index_url" --force-reinstall "$package_spec"; then
+    printf 'PyPI installation failed; using the verified release fallback.\n' >&2
+    prepare_fallback_wheel
+    "$install_dir/bin/python" -m pip install --disable-pip-version-check --force-reinstall \
+      "$wheel_path"
+  fi
   ln -sfn -- "$install_dir/bin/claude-auth-manager" "$bin_dir/claude-auth-manager"
   ln -sfn -- "$install_dir/bin/cam" "$bin_dir/cam"
   installed_command="$bin_dir/claude-auth-manager"
@@ -127,6 +170,10 @@ fi
 [ -n "$installed_command" ] && [ -x "$installed_command" ] || \
   die "installation completed but claude-auth-manager was not found"
 printf 'Installed commands: %s and cam\n' "$installed_command"
+case ":${PATH:-}:" in
+  *:"$(dirname "$installed_command")":*) ;;
+  *) printf 'Add %s to PATH to invoke cam directly.\n' "$(dirname "$installed_command")" ;;
+esac
 
 if [ "$install_only" -eq 1 ]; then
   printf 'Installation complete. Run: %s account add --current\n' "$installed_command"

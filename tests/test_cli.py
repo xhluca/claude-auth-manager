@@ -18,7 +18,7 @@ from claude_auth_manager.storage import atomic_write_json
 
 
 def test_version_and_primary_commands_parse() -> None:
-    assert __version__ == "0.0.1"
+    assert __version__ == "0.0.2"
     assert (
         cli.parser().parse_args(["key", "add", "work", "--provider", "google"]).provider == "google"
     )
