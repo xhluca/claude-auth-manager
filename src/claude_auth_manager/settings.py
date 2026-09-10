@@ -17,7 +17,7 @@ from .agents import (
     remove_managed_agents,
     sync_managed_agents,
 )
-from .fallback import selected_links, validate_links
+from .fallback import fallback_order, selected_links, validate_links
 from .models import claude_model, managed_model, picker_row
 from .paths import (
     accounts_dir,
@@ -183,9 +183,9 @@ def save_preferences(
     confirmation = current.get(CHECK_CONFIRMATION_FIELD, True)
     routes = {managed_model(model) for model in models}
     fallbacks = {
-        source: target
-        for source, target in selected_links(current).items()
-        if source in routes and target in routes
+        source: [target for target in targets if target in routes]
+        for source, targets in selected_links(current).items()
+        if source in routes and any(target in routes for target in targets)
     }
     atomic_write_json(
         preferences_path(),
@@ -222,10 +222,11 @@ def save_preferences(
 
 
 @_settings_locked
-def save_fallbacks(links: dict[str, str]) -> None:
+def save_fallbacks(links: dict[str, list[str]]) -> None:
     document = load_preferences()
-    validate_links(links, {managed_model(model) for model in favorite_models()})
-    document["fallbacks"] = dict(links)
+    document["fallbacks"] = validate_links(
+        links, {managed_model(model) for model in favorite_models()}
+    )
     atomic_write_json(preferences_path(), document)
     from .fallback import state_path
 
@@ -252,13 +253,7 @@ def refresh_fallback_picker(active: dict[str, Any]) -> None:
         description = picker_row(models[route], hybrid=True)["description"]
         entry = active.get(route, {}) if route in links else {}
         target = entry.get("target")
-        reachable = set()
-        cursor = route
-        while cursor in links:
-            cursor = links[cursor]
-            if cursor in reachable:
-                break
-            reachable.add(cursor)
+        reachable = set(fallback_order(route, links)[1:])
         if target is not None and target not in reachable:
             entry, target = {}, None
         if entry.get("exhausted"):
@@ -269,9 +264,11 @@ def refresh_fallback_picker(active: dict[str, Any]) -> None:
                 f"⚠ Fallback active → {compact_model_name(model)} — {picker_source(model)}"
             )
         elif route in links:
-            model = models[links[route]]
+            model = models[links[route][0]]
             credential = model.get("credential_label") or model["credential"]
             description += f" · fallback → {compact_model_name(model)} ({credential})"
+            if len(links[route]) > 1:
+                description += f" (+{len(links[route]) - 1})"
         if option.get("description") != description:
             option["description"] = description
             changed = True

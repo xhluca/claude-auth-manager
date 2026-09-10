@@ -10,7 +10,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import suppress
 from typing import Any
 
-from .fallback import UpstreamFailure, failure_kind, selected_links
+from .fallback import UpstreamFailure, failure_kind, fallback_order, selected_links
 from .google import (
     OpenAIStreamTranslator,
     anthropic_to_openai,
@@ -204,7 +204,8 @@ def forward_managed(handler: Any, original: bytes) -> None:
         from .models import managed_model
 
         source = managed_model(source_model)
-    target = source
+    candidates = iter(fallback_order(source, links))
+    target = next(candidates, None)
     visited: set[str] = set()
     reason = ""
     last_error: UpstreamFailure | None = None
@@ -219,7 +220,7 @@ def forward_managed(handler: Any, original: bytes) -> None:
         if unavailable and not count_only:
             reason = unavailable["reason"]
             last_error = UpstreamFailure(reason, 429 if reason == "usage limit" else 503)
-            target = links.get(target)
+            target = next(candidates, None)
             continue
         payload = json.loads(original)
         payload["model"] = target
@@ -338,7 +339,7 @@ def forward_managed(handler: Any, original: bytes) -> None:
             if not count_only:
                 state.failed(target, last_error)
             reason = last_error.kind
-            target = None if count_only else links.get(target)
+            target = None if count_only else next(candidates, None)
         except (UpstreamFailure, OSError, http.client.HTTPException, json.JSONDecodeError) as exc:
             error = (
                 exc
@@ -373,7 +374,7 @@ def forward_managed(handler: Any, original: bytes) -> None:
                 return
             last_error = error
             reason = error.kind
-            target = None if count_only else links.get(target)
+            target = None if count_only else next(candidates, None)
         finally:
             connection.close()
     status = last_error.status if last_error else 503

@@ -725,7 +725,7 @@ class HybridRouterServer(ThreadingHTTPServer):
         google_upstream: str | None = None,
         model_modalities: dict[str, frozenset[str]] | None = None,
         record_status: bool = True,
-        fallbacks: dict[str, str] | None = None,
+        fallbacks: dict[str, list[str]] | None = None,
         fallback_state: FallbackState | None = None,
         fallback_timeout: float = 60,
     ) -> None:

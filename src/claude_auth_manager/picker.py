@@ -8,7 +8,6 @@ import sys
 from contextlib import suppress
 from typing import Any
 
-from .fallback import validate_links
 from .models import claude_subscription_label, compact_model_name, top_matches
 
 PAIR_TITLE = 1
@@ -150,7 +149,7 @@ def _draw(
     search_mode: bool,
     catalog: list[dict[str, Any]] | None = None,
     source_label: str = "All accounts and keys",
-    fallbacks: dict[str, str] | None = None,
+    fallbacks: dict[str, list[str]] | None = None,
 ) -> None:
     screen.erase()
     height, width = screen.getmaxyx()
@@ -210,13 +209,16 @@ def _draw(
         label = compact_model_name(model)
         source = model.get("display_source") or model.get("description")
         suffix = f" — {source}" if isinstance(source, str) and source else ""
-        target = (fallbacks or {}).get(model_id)
+        targets = (fallbacks or {}).get(model_id, [])
+        target = targets[0] if targets else None
         fallback_model = next(
             (item for item in (catalog or []) if _selection_id(item) == target), None
         )
         if fallback_model:
             credential = fallback_model.get("credential_label") or fallback_model.get("credential")
             suffix = f" → {compact_model_name(fallback_model)} ({credential})" + suffix
+            if len(targets) > 1:
+                suffix = f" [+{len(targets) - 1} fallbacks]" + suffix
         if not search_mode and absolute == cursor:
             screen.addnstr(
                 row_index,
@@ -347,32 +349,32 @@ def _source_menu(screen: Any, sources: list[SourceChoice], selected_index: int) 
 
 
 def _fallback_choices(
-    models: list[dict], selected: list[str], source: str, links: dict[str, str]
+    models: list[dict], selected: list[str], source: str, links: dict[str, list[str]]
 ) -> list[dict]:
-    choices = []
-    # Edges outside an account-scoped view remain valid and are preserved on save.
-    allowed = set(selected) | set(links) | set(links.values())
-    for model in models:
-        target = _selection_id(model)
-        if target not in selected:
-            continue
-        try:
-            validate_links({**links, source: target}, allowed)
-        except ValueError:
-            continue
-        choices.append(model)
-    return choices
+    return [
+        model
+        for model in models
+        if _selection_id(model) in selected
+        and (_selection_id(model) != source or source in links.get(source, []))
+    ]
 
 
 def _fallback_menu(
-    screen: Any, models: list[dict], source: dict, selected: list[str], links: dict[str, str]
+    screen: Any, models: list[dict], source: dict, selected: list[str], links: dict[str, list[str]]
 ) -> None:
     source_id = _selection_id(source)
     candidates = _fallback_choices(models, selected, source_id, links)
+    ranked = list(links.get(source_id, []))
     query, cursor = "", 0
+    ranked_view = False
     while True:
-        matches = top_matches(candidates, query)
-        choices = [None, *matches]
+        by_id = {_selection_id(model): model for model in candidates}
+        choices = (
+            [by_id[route] for route in ranked if route in by_id]
+            if ranked_view
+            else top_matches(candidates, query)
+        )
+        cursor = min(cursor, max(0, len(choices) - 1))
         screen.erase()
         height, width = screen.getmaxyx()
         screen.addnstr(
@@ -385,23 +387,35 @@ def _fallback_menu(
         screen.addnstr(
             1, 0, str(source.get("display_source") or source.get("credential") or ""), width - 1
         )
+        screen.addnstr(
+            2,
+            0,
+            f"{'Ranked fallbacks' if ranked_view else 'Model pool'} · {len(ranked)} selected",
+            width - 1,
+        )
         screen.addnstr(3, 0, "Search: " + query, width - 1, _style(PAIR_QUERY))
         screen.addnstr(
             4,
             0,
-            "Type to filter · ↑/↓ move · Enter apply · Esc return · cycles excluded",
+            "Tab pool/order · Enter toggle · Ctrl-U/D reorder · Ctrl-S apply · Esc cancel",
+            width - 1,
+        )
+        screen.addnstr(
+            5,
+            0,
+            "↑/↓ browse · Type to search pool"
+            if choices
+            else "No models — Tab for pool, Backspace to clear search",
             width - 1,
         )
         start = max(0, cursor - max(1, height - 8) + 1)
         for row, model in enumerate(choices[start : start + max(1, height - 8)], 6):
-            label = "No fallback"
-            if model is not None:
-                source_label = (
-                    model.get("display_source")
-                    or model.get("description")
-                    or model.get("credential")
-                )
-                label = f"{compact_model_name(model)} — {source_label}"
+            source_label = (
+                model.get("display_source") or model.get("description") or model.get("credential")
+            )
+            route = _selection_id(model)
+            rank = f"{ranked.index(route) + 1}." if route in ranked else "○"
+            label = f"{rank} {compact_model_name(model)} — {source_label}"
             screen.addnstr(
                 row,
                 0,
@@ -415,17 +429,31 @@ def _fallback_menu(
             cursor = max(0, cursor - 1)
         elif key == curses.KEY_DOWN:
             cursor = min(len(choices) - 1, cursor + 1)
-        elif key in ("\n", "\r", curses.KEY_ENTER):
-            if choices[cursor] is None:
-                links.pop(source_id, None)
+        elif key == "\t":
+            ranked_view, cursor = not ranked_view, 0
+        elif key == "\x13":
+            if ranked:
+                links[source_id] = ranked
             else:
-                links[source_id] = _selection_id(choices[cursor])
+                links.pop(source_id, None)
             return
+        elif key in ("\n", "\r", curses.KEY_ENTER) and choices:
+            _ordered_toggle(ranked, _selection_id(choices[cursor]))
+        elif key in ("\x15", "\x04") and choices:
+            route = _selection_id(choices[cursor])
+            if route in ranked:
+                index = ranked.index(route)
+                destination = max(0, min(len(ranked) - 1, index + (-1 if key == "\x15" else 1)))
+                ranked[index], ranked[destination] = ranked[destination], ranked[index]
+                if ranked_view:
+                    cursor = destination
         elif key in ("\x1b", "\x03"):
             return
         elif key in ("\b", "\x7f", curses.KEY_BACKSPACE):
+            ranked_view = False
             query, cursor = query[:-1], 0
         elif isinstance(key, str) and key.isprintable():
+            ranked_view = False
             query, cursor = query + key, 0
 
 
@@ -433,7 +461,7 @@ def _curses_picker(
     models: list[dict[str, Any]],
     initial: list[str],
     initial_account: str | None = None,
-    fallbacks: dict[str, str] | None = None,
+    fallbacks: dict[str, list[str]] | None = None,
     other_favorites: list[dict] | None = None,
 ) -> list[str] | None:
     links = dict(fallbacks or {})
@@ -532,9 +560,9 @@ def _curses_picker(
                 _ordered_toggle(selected, model_id)
                 if model_id not in selected:
                     links = {
-                        source: target
-                        for source, target in links.items()
-                        if model_id not in (source, target)
+                        source: [target for target in targets if target != model_id]
+                        for source, targets in links.items()
+                        if source != model_id and any(target != model_id for target in targets)
                     }
             elif key == "/":
                 query = ""
@@ -557,7 +585,7 @@ def _line_picker(
     models: list[dict[str, Any]],
     initial: list[str],
     initial_account: str | None = None,
-    fallbacks: dict[str, str] | None = None,
+    fallbacks: dict[str, list[str]] | None = None,
     other_favorites: list[dict] | None = None,
 ) -> list[str] | None:
     links = dict(fallbacks or {})
@@ -629,11 +657,20 @@ def _line_picker(
                     for index, model in enumerate(candidates, 1):
                         source_label = model.get("display_source") or model.get("credential")
                         print(f"{index}) {compact_model_name(model)} — {source_label}")
-                    index = int(input("Fallback number: "))
-                    if index == 0:
+                    indices = [
+                        int(value)
+                        for value in input(
+                            "Fallback numbers in priority order (0 clears): "
+                        ).split()
+                    ]
+                    if indices == [0]:
                         links.pop(source, None)
-                    elif 1 <= index <= len(candidates):
-                        links[source] = _selection_id(candidates[index - 1])
+                    elif (
+                        indices
+                        and len(set(indices)) == len(indices)
+                        and all(1 <= index <= len(candidates) for index in indices)
+                    ):
+                        links[source] = [_selection_id(candidates[index - 1]) for index in indices]
                     else:
                         raise ValueError
                     continue
@@ -645,9 +682,9 @@ def _line_picker(
                     _ordered_toggle(selected, model_id)
                     if model_id not in selected:
                         links = {
-                            source: target
-                            for source, target in links.items()
-                            if model_id not in (source, target)
+                            source: [target for target in targets if target != model_id]
+                            for source, targets in links.items()
+                            if source != model_id and any(target != model_id for target in targets)
                         }
             except (ValueError, IndexError):
                 print("Enter result numbers, f, /, s, or q.", file=sys.stderr)
@@ -682,7 +719,7 @@ def choose_models(
     initial: list[str],
     *,
     initial_account: str | None = None,
-    fallbacks: dict[str, str] | None = None,
+    fallbacks: dict[str, list[str]] | None = None,
     other_favorites: list[dict] | None = None,
 ) -> list[str] | None:
     if not sys.stdin.isatty() or not sys.stdout.isatty():

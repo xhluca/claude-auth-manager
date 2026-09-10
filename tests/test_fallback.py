@@ -14,6 +14,7 @@ import pytest
 from claude_auth_manager import cli
 from claude_auth_manager.fallback import (
     FallbackState,
+    fallback_order,
     retry_delay,
     state_path,
     validate_links,
@@ -420,15 +421,15 @@ def test_google_streaming_fallback_banner(chain):
 
 def test_cli_links_reload_without_restart_and_cycles_are_atomic(chain, capsys):
     router, upstream, ids, _now = chain
-    assert cli.main(["select", "--fallback", ids[0], ids[2]]) == 0
+    assert cli.main(["select", ids[0], "--fallback", ids[2]]) == 0
     original = load_preferences()
-    assert cli.main(["select", "--fallback", ids[2], ids[0]]) == 1
-    assert load_preferences() == original
+    assert cli.main(["select", ids[2], "--fallback", ids[0]]) == 0
+    assert load_preferences()["favorites"] == original["favorites"]
     upstream.faults["test-provider-secret-max"] = 429
     assert request(router, ids[0])[1]["model"] == "z-ai/glm-5.3-flash"
     assert cli.main(["select", "--clear-fallback", ids[0]]) == 0
     assert request(router, ids[0])[0] == 429
-    assert "cycle" in capsys.readouterr().err
+    assert not capsys.readouterr().err
 
 
 def test_every_route_down_has_bounded_attempts(chain):
@@ -441,10 +442,57 @@ def test_every_route_down_has_bounded_attempts(chain):
     assert len(upstream.calls) == 5
 
 
-def test_links_must_be_activated_and_acyclic():
-    for links in ({"a": "a"}, {"a": "b", "b": "a"}, {"a": "c"}):
+def test_links_must_be_activated_and_unique_but_allow_cycles():
+    for links in ({"a": ["b", "b"]}, {"a": "c"}, {"a": [123]}):
         with pytest.raises(ValueError):
             validate_links(links, {"a", "b"})
+    assert validate_links({"a": "b", "b": "a"}, {"a", "b"}) == {"a": ["b"], "b": ["a"]}
+    assert fallback_order("a", {"a": ["a", "b"], "b": ["a"]}) == ["a", "b"]
+
+
+def test_ranked_traversal_prefers_siblings_and_bounds_diamond_cycles():
+    links = {"a": ["b", "c"], "b": ["d", "a"], "c": ["d", "b"], "d": ["a"]}
+    assert fallback_order("a", links) == ["a", "b", "c", "d"]
+
+
+def test_ranked_cli_listing_validation_and_live_order(chain, capsys):
+    router, upstream, ids, _now = chain
+    assert cli.main(["select", ids[0], "--fallback", ids[2], ids[1]]) == 0
+    assert cli.main(["select", ids[2], "--fallback", ids[0], ids[4]]) == 0
+    before = load_preferences()
+    assert cli.main(["select", ids[0], "--fallback", ids[1], ids[1]]) == 1
+    assert cli.main(["select", ids[0], "--fallback", "missing"]) == 1
+    assert load_preferences() == before
+    capsys.readouterr()
+    assert cli.main(["list", "--fallback", ids[0], "--json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert rows[0]["fallbacks"] == [ids[2], ids[1]]
+    assert rows[0]["attempt_order"][:4] == [ids[0], ids[2], ids[1], ids[4]]
+    assert cli.main(["list", "--fallback", "--json"]) == 0
+    assert len(json.loads(capsys.readouterr().out)) == len(ids)
+    upstream.faults.update({"test-provider-secret-max": 429, "test-provider-secret-router": 402})
+    assert request(router, ids[0])[0] == 200
+    assert [call[0] for call in upstream.calls] == [
+        "test-provider-secret-max",
+        "test-provider-secret-router",
+        "test-provider-secret-personal",
+    ]
+
+
+def test_all_down_ranked_cycle_exhausts_once_and_recovers(chain):
+    router, upstream, ids, now = chain
+    save_fallbacks({ids[0]: [ids[1], ids[2]], ids[1]: [ids[0], ids[2]], ids[2]: [ids[0]]})
+    upstream.faults.update(
+        {"test-provider-secret-" + name: 503 for name in ("max", "personal", "router")}
+    )
+    assert request(router, ids[0])[0] == 503
+    assert len(upstream.calls) == 3
+    assert request(router, ids[0])[0] == 503
+    assert len(upstream.calls) == 3
+    now[0] += 11
+    upstream.faults.clear()
+    assert request(router, ids[0])[0] == 200
+    assert len(upstream.calls) == 4
 
 
 def test_retry_delay_honors_subscription_reset_and_retry_after():

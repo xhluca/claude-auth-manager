@@ -50,7 +50,7 @@ uv tool install claude-auth-manager
 cam account add --current
 ```
 
-For a pinned installation: `uv tool install 'claude-auth-manager==0.0.3'`.
+For a pinned installation: `uv tool install 'claude-auth-manager==0.0.4'`.
 Ensure `~/.local/bin` is on your PATH (`uv tool update-shell` can help for uv installs).
 
 ### Update, reset, and uninstall
@@ -280,24 +280,23 @@ replacing that exact subagent model with `sonnet`.
 
 ### Automatic fallback
 
-Each selected model route can have one fallback to another selected route, even
-on a different account, key, or provider. In `cam select`, highlight a selected
-model and press `Ctrl-F`. Type to search the other selected models, then press
-Enter to apply a fallback or choose **No fallback**. The edit is saved with `s`;
-cancelling the picker discards it. Models hidden by an account filter remain
-available as fallback destinations. Self-links and cycles are excluded.
+Each selected model route can have a ranked list of fallbacks on any selected
+account, key, or provider. In `cam select`, highlight a selected model and press
+`Ctrl-F`. Type to search the model pool; Enter adds/removes the highlighted model.
+Tab switches between the pool and the ranked list. `Ctrl-U` moves a selected
+fallback up; `Ctrl-D` moves it down. `Ctrl-S` applies the list; Esc cancels the edit.
+Save the main picker with `s` to commit; cancelling it discards all edits.
+Models hidden by an account filter remain available as fallback destinations.
+Circular links are allowed; a route is never attempted twice in one request.
 
-For example, link an Opus subscription to another account's Sonnet, then link
-that Sonnet to an OpenRouter model. You configure each next step separately:
+Set a route's entire ranked list with one command; this does not change favorites:
 
 ```sh
-cam select --fallback \
-  'cam/anthropic/primary@example.com/claude-opus-5' \
-  'cam/anthropic/backup@example.com/claude-sonnet-5'
-cam select --fallback \
+cam select 'cam/anthropic/primary@example.com/claude-opus-5' --fallback \
   'cam/anthropic/backup@example.com/claude-sonnet-5' \
   'cam/openrouter/personal/z-ai/glm-5.3-flash'
-cam list --config --json
+cam list --fallback
+cam list --fallback 'cam/anthropic/primary@example.com/claude-opus-5' --json
 cam select --clear-fallback 'cam/anthropic/primary@example.com/claude-opus-5'
 ```
 
@@ -308,7 +307,10 @@ Fallback is opt-in: CAM never chooses another paid key or account by itself.
 
 When a route returns insufficient credits (402), a usage limit (429), a temporary
 server error (500/502/503/504/529), a timeout (408), or a connection failure, CAM
-tries its next link with that route's credentials. It can walk through several
+tries ranked alternatives with their own credentials. Direct alternatives take
+priority over their descendants: A → [B, C], B → [D] attempts A, B, C, D.
+Duplicate visits (including circular links) are skipped. Each request starts a
+fresh traversal, subject to cooldowns. It can walk through several
 unavailable accounts in one request. Authentication, permission/guardrail, and
 invalid-request errors are returned directly. No undeclared route is tried.
 
@@ -355,6 +357,7 @@ cam [-h] [--version] COMMAND ...
 cam list [QUERY...] [--model] [--account [ACCOUNT] | --key [KEY]]
          [--provider PROVIDER]... [--tools] [--offline] [--json]
 cam list [--route | --config] [--check-confirmation {ask,never}] [--json]
+cam list --fallback [ROUTE] [--json]
 ```
 
 - No view flag — list non-secret metadata for all saved accounts and provider keys.
@@ -368,6 +371,7 @@ cam list [--route | --config] [--check-confirmation {ask,never}] [--json]
 - `--tools` — with `--model`, keep only models advertising tool support.
 - `--offline` — with `--model`, use saved catalogs without network refresh.
 - `--route` — list only the currently selected `/model` favorites.
+- `--fallback [ROUTE]` — show ranked fallbacks and effective attempt order for every selected model or one exact route; supports `--json` and makes no network requests.
 - `--config` — show the default model, router port, check-confirmation mode, and routes.
 - `--check-confirmation ask|never` — with `--config`, require or disable confirmation for billable route checks.
 - `--json` — emit the selected view as JSON instead of a table.
@@ -444,14 +448,15 @@ Without `--offline`, `cam search` refreshes the applicable catalogs before searc
 
 ```text
 cam select [ROUTE...] [--account ACCOUNT]... [--port PORT]
-           [--fallback FROM TO]... [--clear-fallback FROM]...
+           [--fallback TARGET [TARGET ...]] [--clear-fallback FROM]...
 ```
 
 - No `ROUTE` — open the interactive multi-select picker.
 - `ROUTE...` — run non-interactively and select exact `cam/...` routes, `provider/credential/model` specs, or unambiguous model IDs.
 - `--account ACCOUNT` — include only this Claude subscription in the edit and initially filter to it when singular; API keys remain in the Source menu, and other subscription favorites are preserved; repeatable.
 - `--port PORT` — save and use a local router port from 1–65535; otherwise reuse the configured port or `9427`.
-- `--fallback FROM TO` — set one next-hop link between selected routes; repeatable; alone edits links without opening the picker or refreshing catalogs.
+- `ROUTE --fallback TARGET [TARGET ...]` — replace one route's ordered fallbacks without changing favorites, opening the picker, or refreshing catalogs; destinations must be selected favorites.
+- `cam list --fallback [ROUTE] [--json]` — show direct rankings and the effective attempt order for all selected routes or one route, without network requests.
 - `--clear-fallback FROM` — remove a selected route's fallback link; repeatable; applies before `--fallback` edits.
 
 Interactive picker keys:
@@ -461,7 +466,7 @@ Interactive picker keys:
 - In the Source dropdown, type to filter account labels, emails, key nicknames, or providers; use `↑`/`↓` and `Enter` to apply, or `Esc` to return.
 - `↑`, `↓` or `k`, `j` — move through results; moving above the first result returns to search.
 - `Enter`, `Space` — toggle the highlighted model; `Enter` from search enters result browsing.
-- `Ctrl-F` — while browsing a selected model, open its searchable fallback menu; Enter applies and Esc returns; save the main picker to commit.
+- `Ctrl-F` — open the highlighted selected model's fallback editor: type to search, Enter toggle, Tab pool/ranking, Ctrl-U/D move up/down, Ctrl-S apply, Esc cancel; save the main picker to commit.
 - `Esc` — return to search; `/` clears the search and returns to it from result browsing.
 - `s` or `S` — save while browsing; in search, use `Ctrl-S` or `Shift-S` because lowercase `s` is searchable text.
 - `q` or `Ctrl-C` — cancel without changing favorites.
@@ -573,6 +578,8 @@ synthetic credentials. `docker/Dockerfile.fallback` extends the existing UI test
 image with pytest, pexpect, and pyte; mount this checkout at `/src` and the Claude
 binary at `/usr/local/bin/claude`, then run the script with network disabled.
 Pass `--late` to test Claude's automatic retry after a partial streamed response.
+`scripts/test-ranked-picker.py` checks actual curses search, selection, reordering,
+and saving hotkeys in a PTY using synthetic models; run in the same test image.
 
 `uv run python scripts/test-fallback-live.py` is billable: it uses each selected
 credential as a real destination for a Claude Code Glob tool round-trip, with

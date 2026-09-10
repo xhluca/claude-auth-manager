@@ -120,11 +120,11 @@ def test_lowercase_s_remains_available_for_search(monkeypatch, sample_models) ->
     assert states[-1] == ("s", 0, True)
 
 
-def test_fallback_menu_searches_selected_routes_and_excludes_cycles(monkeypatch):
+def test_fallback_menu_searches_selected_routes_and_allows_cycles(monkeypatch):
     class MenuScreen(RecordingScreen):
         def __init__(self):
             super().__init__()
-            self.keys = iter([*"gamma", curses.KEY_DOWN, "\n"])
+            self.keys = iter([*"gamma", "\n", "\x13"])
 
         def get_wch(self):
             return next(self.keys)
@@ -133,14 +133,14 @@ def test_fallback_menu_searches_selected_routes_and_excludes_cycles(monkeypatch)
         {"id": name, "name": name, "selection_id": name, "credential": name}
         for name in ("alpha", "beta", "gamma", "inactive")
     ]
-    links = {"beta": "alpha"}
+    links = {"beta": ["alpha"]}
     selected = ["alpha", "beta", "gamma"]
     candidates = picker._fallback_choices(models, selected, "alpha", links)
-    assert [model["id"] for model in candidates] == ["gamma"]
+    assert [model["id"] for model in candidates] == ["beta", "gamma"]
     monkeypatch.setattr(picker, "_COLORS_ENABLED", False)
     screen = MenuScreen()
     picker._fallback_menu(screen, models, models[0], selected, links)
-    assert links == {"beta": "alpha", "alpha": "gamma"}
+    assert links == {"beta": ["alpha"], "alpha": ["gamma"]}
     assert any("gamma" in value for value in screen.values)
 
 
@@ -152,7 +152,7 @@ def test_control_f_edits_are_committed_only_when_picker_is_saved(monkeypatch):
     monkeypatch.setattr(
         picker,
         "_fallback_menu",
-        lambda _screen, _models, _source, _selected, links: links.update(alpha="beta"),
+        lambda _screen, _models, _source, _selected, links: links.update(alpha=["beta"]),
     )
     links = {}
     for action in ("q", "s"):
@@ -162,7 +162,19 @@ def test_control_f_edits_are_committed_only_when_picker_is_saved(monkeypatch):
         if action == "q":
             assert result is None and links == {}
         else:
-            assert result == ["alpha", "beta"] and links == {"alpha": "beta"}
+            assert result == ["alpha", "beta"] and links == {"alpha": ["beta"]}
+
+
+def test_fallback_menu_reorders_and_cancels(monkeypatch):
+    models = [{"id": name, "name": name} for name in ("alpha", "beta", "gamma")]
+    monkeypatch.setattr(picker, "_COLORS_ENABLED", False)
+    for finish, expected in [("\x13", ["gamma", "beta"]), ("\x1b", ["beta", "gamma"])]:
+        screen = RecordingScreen()
+        keys = iter(["\t", curses.KEY_DOWN, "\x15", finish])
+        screen.get_wch = lambda keys=keys: next(keys)
+        links = {"alpha": ["beta", "gamma"]}
+        picker._fallback_menu(screen, models, models[0], ["alpha", "beta", "gamma"], links)
+        assert links["alpha"] == expected
 
 
 def test_search_help_shows_save_shortcuts(monkeypatch, sample_models) -> None:

@@ -15,6 +15,7 @@ import pyte
 from test_fallback import chain
 
 from claude_auth_manager.paths import claude_settings_path
+from claude_auth_manager.settings import save_fallbacks
 from claude_auth_manager.storage import atomic_write_json, atomic_write_text
 
 
@@ -43,6 +44,8 @@ def main(first_failure=429):
         fixture = chain.__wrapped__(root)
         router, upstream, ids, _now = next(fixture)
         try:
+            # Ranked alternatives with circular links must still complete the job.
+            save_fallbacks({ids[0]: [ids[1], ids[2]], ids[1]: [ids[0]], ids[2]: [ids[0], ids[3]]})
             # Both Claude subscriptions reject; an OpenRouter model takes over.
             upstream.faults.update(
                 {"test-provider-secret-max": first_failure, "test-provider-secret-personal": 529}

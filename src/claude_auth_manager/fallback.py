@@ -20,27 +20,41 @@ def state_path() -> Path:
     return state_dir() / "fallback-state.json"
 
 
-def validate_links(links: Any, routes: set[str]) -> dict[str, str]:
+def validate_links(links: Any, routes: set[str]) -> dict[str, list[str]]:
     if not isinstance(links, dict):
         raise ValueError("fallbacks must be a mapping of source routes to target routes")
-    for source, target in links.items():
-        if not isinstance(source, str) or not isinstance(target, str):
+    result = {}
+    for source, targets in links.items():
+        targets = [targets] if isinstance(targets, str) else targets
+        if (
+            not isinstance(source, str)
+            or not isinstance(targets, list)
+            or not all(isinstance(target, str) for target in targets)
+        ):
             raise ValueError("fallback links must contain route strings")
-        if source not in routes or target not in routes:
+        if source not in routes or any(target not in routes for target in targets):
             raise ValueError("fallback source and target must both be selected favorites")
-        visited = {source}
-        cursor = target
-        while True:
-            if cursor in visited:
-                raise ValueError("fallback links cannot contain a cycle or point to themselves")
-            visited.add(cursor)
-            if cursor not in links:
-                break
-            cursor = links[cursor]
-    return dict(links)
+        if len(set(targets)) != len(targets):
+            raise ValueError("fallback rankings cannot contain duplicate routes")
+        if targets:
+            result[source] = list(targets)
+    return result
 
 
-def selected_links(document: dict[str, Any]) -> dict[str, str]:
+def fallback_order(source: str, links: dict) -> list[str]:
+    """Breadth-first ranked traversal, trying each route once even in cycles."""
+    queue, visited, order = [source], set(), []
+    for route in queue:
+        if route in visited:
+            continue
+        visited.add(route)
+        order.append(route)
+        targets = links.get(route, [])
+        queue.extend([targets] if isinstance(targets, str) else targets)
+    return order
+
+
+def selected_links(document: dict[str, Any]) -> dict[str, list[str]]:
     routes = {
         managed_model(model) for model in document.get("favorites", []) if isinstance(model, dict)
     }

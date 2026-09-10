@@ -22,7 +22,7 @@ from .catalogs import (
     search_all,
 )
 from .check import probe_model
-from .fallback import selected_links, validate_links
+from .fallback import fallback_order, selected_links, validate_links
 from .fallback import state_path as fallback_state_path
 from .launcher import has_native_login
 from .models import (
@@ -98,6 +98,13 @@ def parser() -> argparse.ArgumentParser:
         help="with --model, filter model metadata using terms or glob patterns",
     )
     listing_views = listing.add_mutually_exclusive_group()
+    listing_views.add_argument(
+        "--fallback",
+        nargs="?",
+        const="",
+        metavar="ROUTE",
+        help="show ranked fallbacks and effective attempt order for all routes or one ROUTE",
+    )
     listing_views.add_argument(
         "--model", dest="models_only", action="store_true", help="show available model routes"
     )
@@ -282,10 +289,9 @@ def parser() -> argparse.ArgumentParser:
     )
     select.add_argument(
         "--fallback",
-        nargs=2,
-        action="append",
-        metavar=("FROM", "TO"),
-        help="set a selected route's fallback; repeatable; alone edits without a picker",
+        nargs="+",
+        metavar="TARGET",
+        help="replace ROUTE's ranked fallback list, in priority order, without changing favorites",
     )
     select.add_argument(
         "--clear-fallback",
@@ -553,6 +559,7 @@ def command_list(
     models_only: bool = False,
     routes_only: bool = False,
     config_only: bool = False,
+    fallback: str | None = None,
     queries: list[str] | None = None,
     providers: list[str] | None = None,
     tools_only: bool = False,
@@ -563,6 +570,42 @@ def command_list(
     """List non-secret credential, model, route, or configuration metadata."""
     queries = queries or []
     providers = providers or []
+    if fallback is not None:
+        if (
+            account is not None
+            or key is not None
+            or queries
+            or providers
+            or tools_only
+            or offline
+            or check_confirmation
+        ):
+            raise ValueError("--fallback accepts only an optional ROUTE and --json")
+        models = favorite_models()
+        links = selected_links(load_preferences())
+        routes = [
+            managed_model(model)
+            for model in (exact_routes(models, [fallback]) if fallback else models)
+        ]
+        rows = [
+            {
+                "route": route,
+                "fallbacks": links.get(route, []),
+                "attempt_order": fallback_order(route, links),
+            }
+            for route in routes
+        ]
+        if as_json:
+            print(json.dumps(rows, indent=2))
+        else:
+            for row in rows:
+                print(row["route"])
+                for rank, target in enumerate(row["fallbacks"], 1):
+                    print(f"  {rank}. {target}")
+                if not row["fallbacks"]:
+                    print("  No fallbacks")
+                print("  Attempt order: " + " → ".join(row["attempt_order"]))
+        return 0
     if check_confirmation is not None and not config_only:
         raise ValueError("--check-confirmation requires --config")
     if not models_only and (queries or providers or tools_only or offline):
@@ -792,14 +835,18 @@ def _account_scope(
     )
 
 
-def _edit_fallbacks(args: argparse.Namespace, models: list[dict], links: dict[str, str]) -> None:
+def _edit_fallbacks(
+    args: argparse.Namespace, models: list[dict], links: dict[str, list[str]]
+) -> None:
     def resolve(value: str) -> str:
         return managed_model(exact_routes(models, [value])[0])
 
     for source in getattr(args, "clear_fallback", None) or []:
         links.pop(resolve(source), None)
-    for source, target in getattr(args, "fallback", None) or []:
-        links[resolve(source)] = resolve(target)
+    if getattr(args, "fallback", None):
+        if len(args.routes) != 1:
+            raise ValueError("use cam select ROUTE --fallback TARGET [TARGET ...]")
+        links[resolve(args.routes[0])] = [resolve(target) for target in args.fallback]
     validate_links(links, {managed_model(model) for model in models})
 
 
@@ -807,7 +854,7 @@ def command_select(args: argparse.Namespace) -> int:
     preferences = load_preferences()
     links = selected_links(preferences)
     edits = getattr(args, "fallback", None) or getattr(args, "clear_fallback", None)
-    if edits and not args.routes:
+    if edits:
         if getattr(args, "accounts", None) or args.port:
             raise ValueError("fallback-only edits cannot use --account or --port")
         _edit_fallbacks(args, favorite_models(), links)
@@ -895,9 +942,9 @@ def command_select(args: argparse.Namespace) -> int:
         raise RuntimeError("invalid router port")
     selected_ids = {managed_model(model) for model in selected}
     links = {
-        source: target
-        for source, target in links.items()
-        if source in selected_ids and target in selected_ids
+        source: [target for target in targets if target in selected_ids]
+        for source, targets in links.items()
+        if source in selected_ids and any(target in selected_ids for target in targets)
     }
     _edit_fallbacks(args, selected, links)
     _configure(selected, port)
@@ -1081,6 +1128,7 @@ def main(argv: list[str] | None = None) -> int:
                 models_only=args.models_only,
                 routes_only=args.routes_only,
                 config_only=args.config_only,
+                fallback=args.fallback,
                 queries=args.queries,
                 providers=args.provider,
                 tools_only=args.tools,
