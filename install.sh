@@ -4,10 +4,10 @@
 set -eu
 
 package_name="claude-auth-manager"
-package_version="0.0.2"
+package_version="0.0.3"
 wheel_name="claude_auth_manager-${package_version}-py3-none-any.whl"
 # Filled from the release artifact by scripts/build-release.sh.
-wheel_sha256="552f859310f181e95dd1bff1f683e8f733b6e61f8a87b7d81b3145b1675a9670"
+wheel_sha256="bcf1df7ce3bf617203d99c54cfa0e65ec7d676a0e113af9e2dd561d016246571"
 pypi_index_url="${CLAUDE_AUTH_MANAGER_PYPI_INDEX_URL:-https://pypi.org/simple}"
 release_base_url="${CLAUDE_AUTH_MANAGER_INSTALL_BASE_URL:-https://github.com/xhluca/claude-auth-manager/releases/download/v${package_version}}"
 package_spec="${package_name}==${package_version}"

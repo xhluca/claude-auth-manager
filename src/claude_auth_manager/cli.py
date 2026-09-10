@@ -296,18 +296,43 @@ def parser() -> argparse.ArgumentParser:
 
     check = commands.add_parser(
         "check",
-        help="check manager health, or run a live probe for one route",
+        help="check manager health, all credentials, or one live model route",
         description=(
-            "Check local health, or send a potentially billable tool probe through one route."
+            "Check local health, inspect saved credentials with non-billable provider metadata, "
+            "or send a potentially billable tool probe through one route."
         ),
     )
     check.add_argument(
         "route", nargs="?", help="configured route to probe; omit for non-billable local health"
     )
+    check_sources = check.add_mutually_exclusive_group()
+    check_sources.add_argument(
+        "--all",
+        action="store_true",
+        help="check every saved account/key using non-billable provider metadata",
+    )
+    check_sources.add_argument(
+        "--account",
+        nargs="?",
+        const="",
+        metavar="ACCOUNT",
+        help="check all saved subscriptions, or one account ID/label (non-billable)",
+    )
+    check_sources.add_argument(
+        "--key",
+        nargs="?",
+        const="",
+        metavar="KEY",
+        help="check all saved API keys, or one key ID/label (non-billable)",
+    )
     check.add_argument(
         "-y", "--yes", action="store_true", help="send the live route probe without confirmation"
     )
-    check.add_argument("--json", action="store_true", help="emit health or probe results as JSON")
+    check.add_argument(
+        "--json",
+        action="store_true",
+        help="emit health, credential status, or probe results as JSON",
+    )
 
     serve = commands.add_parser(
         "serve",
@@ -893,7 +918,47 @@ def _confirm_check(model: dict[str, Any], assume_yes: bool) -> bool:
     return answer.strip().casefold() in {"y", "yes"}
 
 
-def command_check(route: str | None, *, assume_yes: bool, as_json: bool = False) -> int:
+def command_check(
+    route: str | None,
+    *,
+    assume_yes: bool,
+    as_json: bool = False,
+    all_credentials: bool = False,
+    account: str | None = None,
+    key: str | None = None,
+) -> int:
+    if all_credentials or account is not None or key is not None:
+        if route is not None:
+            raise ValueError("a live model ROUTE cannot be combined with credential status filters")
+        from .status import check_credentials, usage_summary
+
+        result = check_credentials(account=account, key=key)
+        if as_json:
+            print(json.dumps(result, indent=2))
+        elif not result["credentials"]:
+            print("No saved credentials match this check.")
+        else:
+            providers = {
+                "anthropic": "Claude",
+                "openrouter": "OpenRouter",
+                "google": "Google",
+                "anthropic-api": "Anthropic API",
+            }
+            _print_table(
+                ("TYPE", "ID", "PROVIDER", "STATUS", "USAGE / DETAIL"),
+                [
+                    (
+                        r["type"],
+                        r["id"],
+                        providers.get(r["provider"], r["provider"]),
+                        r["status"],
+                        usage_summary(r),
+                    )
+                    for r in result["credentials"]
+                ],
+            )
+            print("Non-billable metadata checks; use cam check ROUTE for an inference/tool test.")
+        return 0 if result["passed"] else 1
     if route is None:
         return command_doctor(as_json=as_json)
     model = exact_routes(load_all_catalogs(), [route])[0]
@@ -1034,7 +1099,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "select":
             return command_select(args)
         if args.command == "check":
-            return command_check(args.route, assume_yes=args.yes, as_json=args.json)
+            return command_check(
+                args.route,
+                assume_yes=args.yes,
+                as_json=args.json,
+                all_credentials=args.all,
+                account=args.account,
+                key=args.key,
+            )
         if args.command == "serve":
             run_router(args.host, args.port)
             return 0

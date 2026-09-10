@@ -50,7 +50,7 @@ uv tool install claude-auth-manager
 cam account add --current
 ```
 
-For a pinned installation: `uv tool install 'claude-auth-manager==0.0.2'`.
+For a pinned installation: `uv tool install 'claude-auth-manager==0.0.3'`.
 Ensure `~/.local/bin` is on your PATH (`uv tool update-shell` can help for uv installs).
 
 ### Update, reset, and uninstall
@@ -474,15 +474,35 @@ models again, `s` to save, and `q` to cancel.
 
 ```text
 cam check [ROUTE] [-y | --yes] [--json]
+cam check --all [--json]
+cam check --account [ACCOUNT] [--json]
+cam check --key [KEY] [--json]
 ```
 
 - No `ROUTE` — perform a non-billable local check of configuration, credentials, and router health.
 - `ROUTE` — send a real, potentially billable request and verify a complete `Glob` tool round-trip.
+- `--all` — check every saved account and key, including those with no selected models, using non-billable provider endpoints.
+- `--account [ACCOUNT]` — check all subscriptions, or one exact account ID/display label.
+- `--key [KEY]` — check all API keys, or one exact key ID/display label.
 - `-y`, `--yes` — send the live route probe without its confirmation prompt.
 - `--json` — emit health or live-probe details as JSON.
 
 Use `cam list --config --check-confirmation ask|never` to change the default
 confirmation behavior for future live checks.
+
+The credential checks do not send prompts or switch accounts/routes. Claude
+subscriptions show available 5-hour/7-day usage windows (and reset timestamps in
+JSON); expired OAuth tokens may refresh through Claude Code. OpenRouter shows the
+key's remaining spending budget, not the underlying account's credit balance.
+Google and Anthropic API keys are checked against their model-list endpoints;
+their remaining quota is reported as unknown. A valid metadata response does not
+guarantee that an inference request, model, or tool is available.
+
+The Claude usage endpoint is the same endpoint used by Claude Code, but is not a
+stable public API and may deny setup tokens with insufficient scope. Failures are
+reported separately per credential, without raw provider messages or tokens.
+Exit status is 1 if any credential check fails or reports a reached limit, and 0
+otherwise (including an empty list). These checks don't change fallback cooldowns.
 
 ### Service and lifecycle
 
