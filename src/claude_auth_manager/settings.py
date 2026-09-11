@@ -193,6 +193,7 @@ def save_preferences(
             "version": 3,
             "mode": "manager",
             "fallbacks": fallbacks,
+            "classifier_accounts": current.get("classifier_accounts", []),
             "favorites": [
                 {
                     key: model[key]
@@ -231,6 +232,13 @@ def save_fallbacks(links: dict[str, list[str]]) -> None:
     from .fallback import state_path
 
     refresh_fallback_picker(read_json_object(state_path(), missing_ok=True).get("active", {}))
+
+
+@_settings_locked
+def save_classifier_accounts(accounts: list[str]) -> None:
+    document = load_preferences()
+    document["classifier_accounts"] = list(accounts)
+    atomic_write_json(preferences_path(), document)
 
 
 @_settings_locked

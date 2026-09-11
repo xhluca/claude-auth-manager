@@ -50,7 +50,7 @@ uv tool install claude-auth-manager
 cam account add --current
 ```
 
-For a pinned installation: `uv tool install 'claude-auth-manager==0.0.4'`.
+For a pinned installation: `uv tool install 'claude-auth-manager==0.0.5'`.
 Ensure `~/.local/bin` is on your PATH (`uv tool update-shell` can help for uv installs).
 
 ### Update, reset, and uninstall
@@ -342,6 +342,39 @@ are not tied to a saved account link; choose the account-specific CAM picker row
 Every public command, argument, and option is listed below. Run bare `cam`,
 `cam account`, or `cam key` to see the corresponding help without an error.
 
+### Native Sonnet / permission-classifier accounts
+
+Claude's auto-mode permission classifier can request a native Sonnet model
+independently of the selected chat model. Switching chat accounts therefore does
+not necessarily switch the classifier's credentials. Opt in to a separate account
+order (saved Claude subscriptions only):
+
+```sh
+cam select --classifier primary@example.com backup@example.com
+cam list --classifier
+cam list --classifier --json
+cam select --clear-classifier
+```
+
+After the updated router is running, account-order edits apply on its next request,
+without changing `/model`, favorites, or permission mode. The first account is
+tried first; availability errors such as quota limits and outages advance to the
+next, with the usual cooldowns. The exact Sonnet model ID (including `[1m]`),
+system prompt, thinking settings, and output schema are preserved. Responses
+receive no routing banners that could corrupt a permission decision. A denial
+is returned unchanged, not retried; authentication/permission errors and exhausted
+chains fail closed. No automatic approval or alternative-model classification
+is performed.
+
+Scope: this handles **all native Sonnet requests passing through CAM**, including
+classifiers, because no reliable classifier-only request marker is assumed
+available. Managed `cam/...` model routes keep their independent fallback chains;
+requests bypassing CAM are unaffected. Listing shows the configured order and
+last recorded routing status; it does not send a classifier request. Clearing
+restores the session's original credentials. Select the order explicitly—CAM
+does not silently enroll accounts. Updating from an older release requires the
+usual router restart once before these new controls can take effect.
+
 ### General
 
 ```text
@@ -358,6 +391,7 @@ cam list [QUERY...] [--model] [--account [ACCOUNT] | --key [KEY]]
          [--provider PROVIDER]... [--tools] [--offline] [--json]
 cam list [--route | --config] [--check-confirmation {ask,never}] [--json]
 cam list --fallback [ROUTE] [--json]
+cam list --classifier [--json]
 ```
 
 - No view flag — list non-secret metadata for all saved accounts and provider keys.
@@ -372,6 +406,7 @@ cam list --fallback [ROUTE] [--json]
 - `--offline` — with `--model`, use saved catalogs without network refresh.
 - `--route` — list only the currently selected `/model` favorites.
 - `--fallback [ROUTE]` — show ranked fallbacks and effective attempt order for every selected model or one exact route; supports `--json` and makes no network requests.
+- `--classifier` — show native Sonnet/classifier account order and last recorded routing status; combine only with `--json`.
 - `--config` — show the default model, router port, check-confirmation mode, and routes.
 - `--check-confirmation ask|never` — with `--config`, require or disable confirmation for billable route checks.
 - `--json` — emit the selected view as JSON instead of a table.
@@ -456,6 +491,8 @@ cam select [ROUTE...] [--account ACCOUNT]... [--port PORT]
 - `--account ACCOUNT` — include only this Claude subscription in the edit and initially filter to it when singular; API keys remain in the Source menu, and other subscription favorites are preserved; repeatable.
 - `--port PORT` — save and use a local router port from 1–65535; otherwise reuse the configured port or `9427`.
 - `ROUTE --fallback TARGET [TARGET ...]` — replace one route's ordered fallbacks without changing favorites, opening the picker, or refreshing catalogs; destinations must be selected favorites.
+- `--classifier ACCOUNT [ACCOUNT ...]` — set a separate ordered list of saved Claude subscriptions for native Sonnet/classifier requests; no model-selection flags can be combined with it.
+- `--clear-classifier` — disable the native Sonnet account override and restore original session credentials.
 - `cam list --fallback [ROUTE] [--json]` — show direct rankings and the effective attempt order for all selected routes or one route, without network requests.
 - `--clear-fallback FROM` — remove a selected route's fallback link; repeatable; applies before `--fallback` edits.
 

@@ -183,7 +183,9 @@ def _success(handler: Any, source: str, target: str, reason: str) -> None:
 
 
 def forward_managed(handler: Any, original: bytes) -> None:
+    from . import classifier
     from .proxy import (
+        RouteDecision,
         _append_system_notice,
         _filter_gemini_sse_event,
         _remove_gemini_thinking_content,
@@ -194,17 +196,27 @@ def forward_managed(handler: Any, original: bytes) -> None:
 
     router = handler.router
     initial, _payload, _body = route_managed_payload(original, router.routes)
-    source = initial.route_id
-    links = (
-        selected_links(load_preferences()) if router.fallbacks is None else dict(router.fallbacks)
+    preferences = load_preferences()
+    classifier_routes = (
+        classifier.routes(initial.model, classifier.accounts(preferences))
+        if initial.provider == "native" and classifier.matches(initial.model)
+        else {}
     )
+    source = initial.route_id
+    links = selected_links(preferences) if router.fallbacks is None else dict(router.fallbacks)
     # Only configured routes authorize credential changes. Native built-ins stay native.
     source_model = router.routes.get(source)
     if source_model:
         from .models import managed_model
 
         source = managed_model(source_model)
-    candidates = iter(fallback_order(source, links))
+    if classifier_routes:
+        source = f"classifier/{initial.model}"
+        # Separate account-only chain; never inherit arbitrary-model chat fallbacks.
+        links = {source: list(classifier_routes)}
+    candidates = iter(
+        list(classifier_routes) if classifier_routes else fallback_order(source, links)
+    )
     target = next(candidates, None)
     visited: set[str] = set()
     reason = ""
@@ -214,7 +226,7 @@ def forward_managed(handler: Any, original: bytes) -> None:
     state = router.fallback_state
     while target and target not in visited:
         visited.add(target)
-        if target != source and target not in router.routes:
+        if target != source and target not in router.routes and target not in classifier_routes:
             break
         unavailable = state.unavailable(target) if source in links else None
         if unavailable and not count_only:
@@ -223,10 +235,18 @@ def forward_managed(handler: Any, original: bytes) -> None:
             target = next(candidates, None)
             continue
         payload = json.loads(original)
-        payload["model"] = target
-        decision, payload, body = route_managed_payload(json.dumps(payload).encode(), router.routes)
+        if classifier_routes:
+            # Preserve exact model, system prompt, structured output, thinking, and
+            # response schema. A classifier must receive no chat routing banners.
+            decision = RouteDecision("anthropic", classifier_routes[target], initial.model, target)
+            body = original
+        else:
+            payload["model"] = target
+            decision, payload, body = route_managed_payload(
+                json.dumps(payload).encode(), router.routes
+            )
         notice = ""
-        if target != source:
+        if target != source and not classifier_routes:
             notice = (
                 f"⚠ CAM fallback active: {route_label(source, router.routes)}\n"
                 f"→ {route_label(target, router.routes)} ({reason})."

@@ -61,6 +61,7 @@ from .settings import (
     favorite_models,
     load_preferences,
     reset_integration,
+    save_classifier_accounts,
     save_fallbacks,
     save_preferences,
     set_check_confirmation,
@@ -98,6 +99,11 @@ def parser() -> argparse.ArgumentParser:
         help="with --model, filter model metadata using terms or glob patterns",
     )
     listing_views = listing.add_mutually_exclusive_group()
+    listing_views.add_argument(
+        "--classifier",
+        action="store_true",
+        help="show native Sonnet/classifier account order and last routing status",
+    )
     listing_views.add_argument(
         "--fallback",
         nargs="?",
@@ -292,6 +298,18 @@ def parser() -> argparse.ArgumentParser:
         nargs="+",
         metavar="TARGET",
         help="replace ROUTE's ranked fallback list, in priority order, without changing favorites",
+    )
+    classifier_modes = select.add_mutually_exclusive_group()
+    classifier_modes.add_argument(
+        "--classifier",
+        nargs="+",
+        metavar="ACCOUNT",
+        help="set native Sonnet/classifier account order; preserves the exact requested model",
+    )
+    classifier_modes.add_argument(
+        "--clear-classifier",
+        action="store_true",
+        help="restore native Sonnet/classifier requests to their original session credentials",
     )
     select.add_argument(
         "--clear-fallback",
@@ -560,6 +578,7 @@ def command_list(
     routes_only: bool = False,
     config_only: bool = False,
     fallback: str | None = None,
+    classifier: bool = False,
     queries: list[str] | None = None,
     providers: list[str] | None = None,
     tools_only: bool = False,
@@ -570,6 +589,44 @@ def command_list(
     """List non-secret credential, model, route, or configuration metadata."""
     queries = queries or []
     providers = providers or []
+    if classifier:
+        from .classifier import accounts as classifier_accounts
+
+        if (
+            account is not None
+            or key is not None
+            or queries
+            or providers
+            or tools_only
+            or offline
+            or check_confirmation
+        ):
+            raise ValueError("--classifier accepts only --json")
+        state = read_json_object(fallback_state_path(), missing_ok=True)
+        result = {
+            "accounts": classifier_accounts(load_preferences()),
+            "scope": "native Sonnet requests, including permission classifiers",
+            "active": {
+                key: value
+                for key, value in state.get("active", {}).items()
+                if key.startswith("classifier/")
+            },
+            "failures": {
+                key: value
+                for key, value in state.get("failures", {}).items()
+                if key.startswith("classifier/")
+            },
+        }
+        if as_json:
+            print(json.dumps(result, indent=2))
+        else:
+            print("Native Sonnet/classifier account order:")
+            for rank, value in enumerate(result["accounts"], 1):
+                print(f"  {rank}. {value}")
+            if not result["accounts"]:
+                print("  Disabled — original session credentials")
+            print("Last routing status: " + json.dumps(result["active"]))
+        return 0
     if fallback is not None:
         if (
             account is not None
@@ -749,6 +806,12 @@ def command_account(args: argparse.Namespace) -> int:
         _bootstrap_account(str(entry["id"]))
     elif args.account_command == "remove":
         account_id = normalize_id(args.name)
+        from .classifier import accounts as classifier_accounts
+
+        if account_id in classifier_accounts(load_preferences()):
+            raise RuntimeError(
+                "account is in the classifier chain; edit or clear it before removal"
+            )
         if _route_uses("anthropic", account_id):
             raise RuntimeError("account is used by a favorite; run cam select before removing it")
         remove_account(account_id)
@@ -852,6 +915,30 @@ def _edit_fallbacks(
 
 def command_select(args: argparse.Namespace) -> int:
     preferences = load_preferences()
+    if getattr(args, "classifier", None) or getattr(args, "clear_classifier", False):
+        from .classifier import accounts as classifier_accounts
+
+        if args.routes or args.accounts or args.port or args.fallback or args.clear_fallback:
+            raise ValueError(
+                "--classifier/--clear-classifier cannot be combined with model selection flags"
+            )
+        saved = list_accounts()
+        chosen = []
+        for value in args.classifier or []:
+            matches = [
+                entry["id"]
+                for entry in saved
+                if value in {entry["id"], entry.get("label"), entry.get("email")}
+            ]
+            if len(matches) != 1:
+                raise ValueError(f"unknown or ambiguous Claude account: {value}")
+            chosen.append(matches[0])
+        classifier_accounts({"classifier_accounts": chosen})
+        save_classifier_accounts(chosen)
+        print(
+            "✓ Saved native Sonnet/classifier account order. Applies on the router's next request."
+        )
+        return 0
     links = selected_links(preferences)
     edits = getattr(args, "fallback", None) or getattr(args, "clear_fallback", None)
     if edits:
@@ -1129,6 +1216,7 @@ def main(argv: list[str] | None = None) -> int:
                 routes_only=args.routes_only,
                 config_only=args.config_only,
                 fallback=args.fallback,
+                classifier=args.classifier,
                 queries=args.queries,
                 providers=args.provider,
                 tools_only=args.tools,

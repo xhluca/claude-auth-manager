@@ -455,6 +455,81 @@ def test_ranked_traversal_prefers_siblings_and_bounds_diamond_cycles():
     assert fallback_order("a", links) == ["a", "b", "c", "d"]
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_classifier_account_failover_preserves_payload_and_has_no_banner(chain, stream):
+    router, upstream, ids, _now = chain
+    assert cli.main(["select", "--classifier", "max", "personal"]) == 0
+    upstream.faults["test-provider-secret-max"] = 429
+    extra = {
+        "system": "Return ONLY a permission decision.",
+        "thinking": {"type": "adaptive"},
+        "output_config": {"format": {"type": "json_schema", "schema": {"type": "object"}}},
+    }
+    status, response = request(router, "claude-sonnet-5[1m]", stream=stream, **extra)
+    assert status == 200
+    assert "CAM fallback active" not in json.dumps(response)
+    assert [call[0] for call in upstream.calls] == [
+        "test-provider-secret-max",
+        "test-provider-secret-personal",
+    ]
+    for _, payload, _ in upstream.calls:
+        assert payload["model"] == "claude-sonnet-5[1m]"
+        for key, value in extra.items():
+            assert payload[key] == value
+    # A hot edit changes the next request without restarting the router.
+    assert cli.main(["select", "--classifier", "personal"]) == 0
+    upstream.calls.clear()
+    assert request(router, "claude-sonnet-5[1m]")[0] == 200
+    assert [call[0] for call in upstream.calls] == ["test-provider-secret-personal"]
+    # Managed chat routes retain their own model/credential choices.
+    assert request(router, ids[2])[0] == 200
+    assert upstream.calls[-1][0] == "test-provider-secret-router"
+
+
+def test_classifier_denial_is_not_retried_or_rewritten(chain, monkeypatch):
+    router, upstream, _ids, _now = chain
+    assert cli.main(["select", "--classifier", "max", "personal"]) == 0
+    original_reply = FaultProvider.reply
+    denied = {"content": [{"type": "text", "text": '{"decision":"deny"}'}]}
+
+    def reply(handler, status, body, content_type="application/json"):
+        return original_reply(handler, status, json.dumps(denied).encode(), content_type)
+
+    monkeypatch.setattr(FaultProvider, "reply", reply)
+    assert request(router, "claude-sonnet-5[1m]") == (200, denied)
+    assert len(upstream.calls) == 1
+
+
+def test_classifier_exhaustion_and_permission_errors_fail_closed(chain):
+    router, upstream, _ids, _now = chain
+    assert cli.main(["select", "--classifier", "max", "personal"]) == 0
+    upstream.faults.update({"test-provider-secret-max": 403})
+    assert request(router, "claude-sonnet-5[1m]")[0] == 403
+    assert len(upstream.calls) == 1
+    upstream.calls.clear()
+    upstream.faults.update({"test-provider-secret-max": 429, "test-provider-secret-personal": 429})
+    assert request(router, "claude-sonnet-5[1m]")[0] == 429
+    assert len(upstream.calls) == 2
+    assert request(router, "claude-sonnet-5[1m]")[0] == 429
+    assert len(upstream.calls) == 2
+
+
+def test_classifier_selection_validation_listing_and_preservation(chain, capsys):
+    _router, _upstream, ids, _now = chain
+    assert cli.main(["select", "--classifier", "max", "personal"]) == 0
+    previous = load_preferences()
+    for values in (["max", "max"], ["router"], ["missing"]):
+        assert cli.main(["select", "--classifier", *values]) == 1
+        assert load_preferences() == previous
+    configure_claude(previous["favorites"], native_login=False)
+    assert load_preferences()["classifier_accounts"] == ["max", "personal"]
+    capsys.readouterr()
+    assert cli.main(["list", "--classifier", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["accounts"] == ["max", "personal"]
+    assert cli.main(["select", "--clear-classifier"]) == 0
+    assert load_preferences()["classifier_accounts"] == []
+
+
 def test_ranked_cli_listing_validation_and_live_order(chain, capsys):
     router, upstream, ids, _now = chain
     assert cli.main(["select", ids[0], "--fallback", ids[2], ids[1]]) == 0
