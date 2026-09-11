@@ -26,7 +26,7 @@ from .paths import (
 from .storage import atomic_write_json, atomic_write_text, ensure_private_dir, read_json_object
 
 REGISTRY_VERSION = 1
-SUPPORTED_KEY_PROVIDERS = frozenset({"openrouter", "google", "anthropic-api"})
+SUPPORTED_KEY_PROVIDERS = frozenset({"openrouter", "google", "anthropic-api", "huggingface"})
 ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9_.@+-]{0,253})$")
 _REFRESH_MARGIN_MS = 5 * 60 * 1000
 _account_locks_guard = Lock()

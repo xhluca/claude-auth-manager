@@ -58,7 +58,9 @@ def events(response: Any) -> Iterator[dict[str, Any]]:
 
 def anthropic_events(response: Any, provider: str, model: str, metadata: dict) -> Iterator[dict]:
     translator = (
-        OpenAIStreamTranslator(model, tool_metadata=metadata) if provider == "google" else None
+        OpenAIStreamTranslator(model, tool_metadata=metadata)
+        if provider in {"google", "huggingface"}
+        else None
     )
     stopped = False
     for payload in events(response):
@@ -271,14 +273,22 @@ def forward_managed(handler: Any, original: bytes) -> None:
         metadata = (
             router.google_metadata(decision.credential) if decision.provider == "google" else {}
         )
-        if count_only and decision.provider == "google":
+        if count_only and decision.provider in {"google", "huggingface"}:
             handler._json_response(200, {"input_tokens": approximate_input_tokens(payload)})
             return
         upstream = {
             "openrouter": router.openrouter_upstream,
             "google": router.google_upstream,
         }.get(decision.provider, router.anthropic_upstream)
-        if decision.provider == "google":
+        if decision.provider == "huggingface":
+            from .huggingface import API_BASE, require_free_route
+            from .registry import read_key
+
+            require_free_route(
+                decision.model, read_key(decision.credential, provider="huggingface")
+            )
+            upstream = API_BASE
+        if decision.provider in {"google", "huggingface"}:
             body = json.dumps(anthropic_to_openai(payload, metadata)).encode()
         headers = handler._upstream_headers(
             decision.provider, decision.model, len(body), credential=decision.credential
@@ -289,7 +299,11 @@ def forward_managed(handler: Any, original: bytes) -> None:
             kwargs["context"] = ssl.create_default_context()
         connection = connection_type(host, port, **kwargs)
         try:
-            endpoint = "/chat/completions" if decision.provider == "google" else handler.path
+            endpoint = (
+                "/chat/completions"
+                if decision.provider in {"google", "huggingface"}
+                else handler.path
+            )
             connection.request("POST", base + endpoint, body=body, headers=headers)
             response = connection.getresponse()
             content_type = response.getheader("Content-Type", "application/json")
@@ -335,7 +349,7 @@ def forward_managed(handler: Any, original: bytes) -> None:
                 if isinstance(document, dict) and document.get("error"):
                     _json(handler, 400, data)
                     return
-                if decision.provider == "google":
+                if decision.provider in {"google", "huggingface"}:
                     document = openai_to_anthropic(document, decision.model, metadata)
                 if notice and not count_only:
                     document["content"] = [

@@ -59,6 +59,12 @@ def _reset(value: Any) -> str | None:
 
 
 def _usage(provider: str, document: dict) -> tuple[dict, bool | None, str]:
+    if provider == "huggingface":
+        return (
+            {},
+            None,
+            "token accepted; inference permission and free-route availability checked on use",
+        )
     if provider == "anthropic":
         windows = {}
         for name in WINDOWS:
@@ -132,6 +138,8 @@ def _check(entry: dict) -> dict:
         url = openrouter.api_base() + "/key"
     elif provider == "google":
         url = google.api_base() + "/models"
+    elif provider == "huggingface":
+        url = "https://huggingface.co/api/whoami-v2"
     else:
         url = ANTHROPIC_BASE + "/v1/models?limit=1"
         headers = {"x-api-key": token, "anthropic-version": "2023-06-01"}

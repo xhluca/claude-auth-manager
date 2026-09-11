@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import google, openrouter
+from . import google, huggingface, openrouter
 from .models import claude_model, compact_model_name, managed_model, search_models
 from .registry import key_entry, list_accounts, list_keys, read_key
 
@@ -144,6 +144,8 @@ def refresh_key_catalog(key_id: str) -> list[dict[str, Any]]:
         models = openrouter.refresh_catalog(key, key_id)
     elif provider == "google":
         models = google.refresh_catalog(key_id, key)
+    elif provider == "huggingface":
+        models = huggingface.refresh_catalog(key_id, key)
     elif provider == "anthropic-api":
         models = list(ANTHROPIC_MODELS)
     else:  # registry validation should make this unreachable
@@ -158,6 +160,8 @@ def load_key_catalog(key_id: str) -> list[dict[str, Any]]:
         models = openrouter.load_catalog(key_id)
     elif provider == "google":
         models = google.load_catalog(key_id)
+    elif provider == "huggingface":
+        models = huggingface.load_catalog(key_id)
     elif provider == "anthropic-api":
         models = list(ANTHROPIC_MODELS)
     else:
@@ -168,7 +172,7 @@ def load_key_catalog(key_id: str) -> list[dict[str, Any]]:
 def refresh_all_catalogs() -> list[dict[str, Any]]:
     models = account_models() + anthropic_api_models()
     for entry in list_keys():
-        if entry.get("provider") in {"openrouter", "google"}:
+        if entry.get("provider") in {"openrouter", "google", "huggingface"}:
             models.extend(refresh_key_catalog(str(entry["id"])))
     return models
 
@@ -183,7 +187,7 @@ def refresh_select_catalogs() -> list[dict[str, Any]]:
     models = account_models() + anthropic_api_models()
     for entry in list_keys():
         key_id = str(entry["id"])
-        if entry.get("provider") == "openrouter":
+        if entry.get("provider") in {"openrouter", "huggingface"}:
             models.extend(refresh_key_catalog(key_id))
         elif entry.get("provider") == "google":
             models.extend(load_key_catalog(key_id))
@@ -193,7 +197,7 @@ def refresh_select_catalogs() -> list[dict[str, Any]]:
 def load_all_catalogs(*, tolerate_missing: bool = False) -> list[dict[str, Any]]:
     models = account_models() + anthropic_api_models()
     for entry in list_keys():
-        if entry.get("provider") not in {"openrouter", "google"}:
+        if entry.get("provider") not in {"openrouter", "google", "huggingface"}:
             continue
         try:
             models.extend(load_key_catalog(str(entry["id"])))

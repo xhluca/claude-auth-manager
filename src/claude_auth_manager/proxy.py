@@ -527,6 +527,10 @@ class HybridRouterHandler(BaseHTTPRequestHandler):
                 raise RuntimeError("Google route is missing its credential")
             headers["Authorization"] = f"Bearer {read_key(credential, provider='google')}"
             headers["x-goog-api-client"] = "claude-auth-manager/0.1"
+        elif route == "huggingface":
+            if not credential:
+                raise RuntimeError("Hugging Face route is missing its credential")
+            headers["Authorization"] = f"Bearer {read_key(credential, provider='huggingface')}"
         elif route == "anthropic-api":
             if not credential:
                 raise RuntimeError("Anthropic API route is missing its credential")

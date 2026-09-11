@@ -50,7 +50,7 @@ uv tool install claude-auth-manager
 cam account add --current
 ```
 
-For a pinned installation: `uv tool install 'claude-auth-manager==0.0.5'`.
+For a pinned installation: `uv tool install 'claude-auth-manager==0.0.6'`.
 Ensure `~/.local/bin` is on your PATH (`uv tool update-shell` can help for uv installs).
 
 ### Update, reset, and uninstall
@@ -417,9 +417,18 @@ metadata.
 
 ### `cam account`
 
+`cam account use ACCOUNT` switches the native/default full login used by Claude's
+`/usage`, not the selected routed chat model. Close Claude sessions using that
+native profile first, then reopen Claude after switching. CAM refuses to replace
+credentials underneath a running native session. Saved model routes and classifier
+chains remain unchanged; the outgoing native login becomes a managed account.
+A private recovery snapshot is kept in CAM's state directory. This command
+currently supports Linux file-backed OAuth logins, not setup tokens or macOS Keychain.
+
 ```text
 cam account add [--current | --token | --token-stdin] [--name NAME]
 cam account remove NAME
+cam account use NAME
 ```
 
 - `cam account add` — open Claude's hosted OAuth flow, or renew the matching saved account.
@@ -433,6 +442,28 @@ The three add-mode flags are mutually exclusive. Setup tokens are intentionally
 not accepted as command-line values.
 
 ### `cam key`
+
+Hugging Face Inference Providers are supported with `--provider huggingface`:
+
+```sh
+cam key add hf --provider huggingface
+cam index --key hf
+cam list --model --key hf --offline
+cam check --key hf
+```
+
+The token is stored privately (mode `0600`) in
+`~/.config/claude-auth-manager/keys/huggingface/hf` (or under `XDG_CONFIG_HOME`).
+Other sessions can discover its nickname with `cam list --key`; agents should use
+`registry.read_key("hf", provider="huggingface")` rather than printing or copying it.
+Tokens need Hugging Face's **Make calls to Inference Providers** permission.
+
+This integration currently offers only live, provider-pinned routes advertised
+as free or with zero input/output prices. It rechecks the catalog before inference
+and refuses unknown/paid routes. Free monthly credits are not treated as free
+models. Availability, provider limits, and prices can change; `cam select` refreshes
+the HF catalog. No payment settings are changed. Chat, tool calls, streaming, and
+managed fallback routing use the existing CAM interface.
 
 ```text
 cam key add NAME --provider PROVIDER

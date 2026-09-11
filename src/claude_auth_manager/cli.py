@@ -167,6 +167,12 @@ def parser() -> argparse.ArgumentParser:
     )
     account.set_defaults(_help_parser=account, _required_action="account_command")
     account_commands = account.add_subparsers(dest="account_command", metavar="ACTION")
+    account_use = account_commands.add_parser(
+        "use",
+        help="switch Claude's native/default login",
+        description="Switch the saved native account used by /usage after closing native sessions.",
+    )
+    account_use.add_argument("name", help="saved full-login account ID, email, or label")
     account_add = account_commands.add_parser(
         "add",
         help="add a Claude login; launches official auth by default",
@@ -479,6 +485,10 @@ def _validate_provider_key(provider: str, key: str) -> None:
         openrouter.validate_key(key)
     elif provider == "google":
         google.validate_key(key)
+    elif provider == "huggingface":
+        from .huggingface import validate_key
+
+        validate_key(key)
     elif provider == "anthropic-api":
         from .anthropic import validate_anthropic_key_shape
 
@@ -804,6 +814,12 @@ def command_account(args: argparse.Namespace) -> int:
             action = "Updated" if entry.get("updated") else "Saved"
             print(f"{action} Claude subscription {entry['id']} ({entry.get('email')}).")
         _bootstrap_account(str(entry["id"]))
+    elif args.account_command == "use":
+        from .native import use_account
+
+        account_id = use_account(args.name)
+        print(f"Native account: {account_id}. Reopen Claude for /usage to use this login.")
+        print("CAM model routes are unchanged; a private recovery snapshot was retained.")
     elif args.account_command == "remove":
         account_id = normalize_id(args.name)
         from .classifier import accounts as classifier_accounts

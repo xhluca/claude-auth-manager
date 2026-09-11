@@ -500,6 +500,30 @@ def test_classifier_denial_is_not_retried_or_rewritten(chain, monkeypatch):
     assert len(upstream.calls) == 1
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_huggingface_transport_and_fallback(chain, monkeypatch, stream):
+    from claude_auth_manager import huggingface
+
+    router, upstream, ids, _now = chain
+    model = {"provider": "huggingface", "credential": "hf-test", "id": "vendor/model:free"}
+    route = managed_model(model)
+    router.routes[route] = model
+    router.fallbacks = {ids[0]: [route]}
+    add_key("huggingface", "hf-test", "test-provider-secret-hf")
+    monkeypatch.setattr(huggingface, "API_BASE", f"http://127.0.0.1:{upstream.server_port}")
+    monkeypatch.setattr(huggingface, "fetch_models", lambda _: [{"id": model["id"]}])
+    upstream.faults["test-provider-secret-max"] = 429
+    status, body = request(router, ids[0], stream=stream)
+    assert status == 200
+    assert "GOOGLE_OK" in json.dumps(body)
+    assert upstream.calls[-1][0] == "test-provider-secret-hf"
+    assert upstream.calls[-1][1]["model"] == model["id"]
+    upstream.calls.clear()
+    monkeypatch.setattr(huggingface, "fetch_models", lambda _: [])
+    assert request(router, route)[0] == 400
+    assert not upstream.calls
+
+
 def test_classifier_exhaustion_and_permission_errors_fail_closed(chain):
     router, upstream, _ids, _now = chain
     assert cli.main(["select", "--classifier", "max", "personal"]) == 0

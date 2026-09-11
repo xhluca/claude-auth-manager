@@ -10,7 +10,7 @@ from typing import Any
 
 MANAGED_MODEL_PREFIX = "cam/"
 OPENROUTER_MODEL_PREFIX = "cam/openrouter/"
-SUPPORTED_ROUTES = frozenset({"anthropic", "anthropic-api", "openrouter", "google"})
+SUPPORTED_ROUTES = frozenset({"anthropic", "anthropic-api", "openrouter", "google", "huggingface"})
 
 
 def supported_parameters(model: dict[str, Any]) -> frozenset[str] | None:
@@ -349,6 +349,7 @@ def _route_source(model: dict[str, Any]) -> str:
         ),
         "anthropic-api": "Anthropic API",
         "google": "Gemini API",
+        "huggingface": "Hugging Face",
         "openrouter": "OpenRouter",
     }.get(provider, _humanize_vendor(provider))
     credential = model.get("credential_label") or model.get("credential")
