@@ -78,6 +78,108 @@ Installer overrides: `CLAUDE_AUTH_MANAGER_PYPI_INDEX_URL` selects a package inde
 private environment; `XDG_BIN_HOME` selects its command-link directory. Standard
 `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` and XDG data/config locations are respected.
 
+## Providers
+
+- [Claude subscriptions](#claude-subscriptions)
+- [OpenRouter](#openrouter)
+- [Google Gemini](#google-gemini)
+- [Hugging Face](#hugging-face)
+- [Anthropic API](#anthropic-api)
+
+You can register multiple accounts and keys, then combine their models in
+`cam select`. Key nicknames must be unique across providers. Examples below use
+masked prompts; agents can instead pass `--key-path /run/secrets/KEY_FILE`.
+Selecting a routed model does not change the native account used by `/usage`.
+
+### Claude subscriptions
+
+```sh
+cam account add --current
+cam account add
+cam list --model --account primary@example.com sonnet --json
+cam select
+```
+
+The first command registers the current login; the second signs in to another
+account without replacing it. Names default to the authenticated email. Select
+account-specific models in Claude's `/model` picker to hot-switch chat routing.
+Use `cam check --account` for saved-account usage metadata. For native `/usage`,
+use `cam account use ACCOUNT` after closing native sessions (Linux full logins only).
+See [account setup](#add-accounts-and-keys) and
+[classifier accounts](#native-sonnet--permission-classifier-accounts) for details.
+
+### OpenRouter
+
+```sh
+cam key add personal --provider openrouter
+cam key add work --provider openrouter --key-path /run/secrets/openrouter-work
+cam list --model --key personal --tools --json
+cam index --key personal
+cam check --key personal
+cam select
+```
+
+Each key has its own catalog and routes. `cam select` refreshes OpenRouter models
+and checks each key's guardrails, so the picker reflects its current allowed
+models. Model names stay compact; descriptions retain provider, key nickname,
+pricing, and the exact OpenRouter ID. Costs and limits belong to the selected
+key; a successful metadata check does not guarantee remaining account credit.
+
+### Google Gemini
+
+```sh
+cam key add gemini-personal --provider google
+cam key add gemini-work --provider google --key-path /run/secrets/gemini-work
+cam index --key gemini-personal
+cam list --model --key gemini-personal --offline
+cam check --key gemini-personal
+cam select
+```
+
+Use a Gemini API key, not a Google website subscription login. CAM connects to
+Google's OpenAI-compatible Gemini endpoint and translates chat, tools, and
+streaming for Claude Code. Refresh the catalog with `cam index` when models
+change. Free-tier eligibility, billing, and quota depend on the Google project;
+CAM does not guarantee that every Gemini model is free.
+
+### Hugging Face
+
+```sh
+cam key add hf --provider huggingface
+cam index --key hf
+cam list --model --key hf --offline
+cam check --key hf
+cam select
+```
+
+Tokens need Hugging Face's **Make calls to Inference Providers** permission.
+The token is stored privately (mode `0600`) in
+`~/.config/claude-auth-manager/keys/huggingface/hf` (or under `XDG_CONFIG_HOME`).
+Other sessions can discover its nickname with `cam list --key`; agents should
+use `registry.read_key("hf", provider="huggingface")` rather than printing it.
+
+This integration offers only live, provider-pinned routes advertised as free or
+with zero input/output prices. CAM refreshes the HF catalog in `cam select` and
+rechecks before inference, refusing unknown or paid routes. Free monthly credits
+are not treated as free models. Availability, provider limits, and prices can
+change; no payment settings are changed. Chat, tools, streaming, and managed
+fallbacks use the same CAM interface as other providers.
+
+### Anthropic API
+
+```sh
+cam key add anthropic-work --provider anthropic-api
+cam list --model --key anthropic-work --offline
+cam check --key anthropic-work
+cam select
+```
+
+This is an Anthropic API key, separate from a Claude subscription. Requests use
+that key's API billing and limits, not a Max/Pro subscription allowance. The
+offered Claude catalog is bundled with CAM; a listed model is not proof that a
+particular key has access. `cam check --key` checks credential metadata;
+`cam check ROUTE` performs an explicitly billable inference/tool test.
+
 ## Add accounts and keys
 
 Register the Claude account currently used by `claude`:
@@ -443,27 +545,8 @@ not accepted as command-line values.
 
 ### `cam key`
 
-Hugging Face Inference Providers are supported with `--provider huggingface`:
-
-```sh
-cam key add hf --provider huggingface
-cam index --key hf
-cam list --model --key hf --offline
-cam check --key hf
-```
-
-The token is stored privately (mode `0600`) in
-`~/.config/claude-auth-manager/keys/huggingface/hf` (or under `XDG_CONFIG_HOME`).
-Other sessions can discover its nickname with `cam list --key`; agents should use
-`registry.read_key("hf", provider="huggingface")` rather than printing or copying it.
-Tokens need Hugging Face's **Make calls to Inference Providers** permission.
-
-This integration currently offers only live, provider-pinned routes advertised
-as free or with zero input/output prices. It rechecks the catalog before inference
-and refuses unknown/paid routes. Free monthly credits are not treated as free
-models. Availability, provider limits, and prices can change; `cam select` refreshes
-the HF catalog. No payment settings are changed. Chat, tool calls, streaming, and
-managed fallback routing use the existing CAM interface.
+See [Providers](#providers) for setup, model-selection examples, and limitations
+for OpenRouter, Google Gemini, Hugging Face, and Anthropic API keys.
 
 ```text
 cam key add NAME --provider PROVIDER
@@ -474,7 +557,7 @@ cam key remove NAME
 ```
 
 - `NAME` — required unique key nickname used in credential-scoped model routes.
-- `--provider`, `-p` — required provider: `openrouter`, `google`, or `anthropic-api`.
+- `--provider`, `-p` — required provider: `openrouter`, `google`, `huggingface`, or `anthropic-api`.
 - `--label LABEL` — set a display label distinct from the route nickname.
 - No secret-input flag — read the key from a masked interactive prompt.
 - `--key KEY` — take the key inline; this can expose it in shell history and process listings.
