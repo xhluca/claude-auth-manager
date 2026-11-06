@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
-from . import google, huggingface, openrouter
+from . import google, huggingface, openrouter, subscriptions
 from .models import claude_model, compact_model_name, managed_model, search_models
 from .registry import key_entry, list_accounts, list_keys, read_key
 
@@ -103,12 +104,20 @@ def _decorate(
     return result
 
 
-def account_models() -> list[dict[str, Any]]:
+def account_models(*, refresh: bool = False) -> list[dict[str, Any]]:
     models: list[dict[str, Any]] = []
+    public: dict = {}
+    sources: set[str] = set()
     for account in list_accounts():
+        account_id = str(account["id"])
+        if refresh:
+            discovered, source = subscriptions.refresh_catalog(account_id, public, ANTHROPIC_MODELS)
+            sources.add(source)
+        else:
+            discovered = subscriptions.load_catalog(account_id) or list(ANTHROPIC_MODELS)
         label = str(account.get("label") or account["id"])
         account_catalog = _decorate(
-            ANTHROPIC_MODELS,
+            discovered,
             "anthropic",
             str(account["id"]),
             label,
@@ -119,6 +128,18 @@ def account_models() -> list[dict[str, Any]]:
                 for model in account_catalog:
                     model[field] = value
         models.extend(account_catalog)
+    if "public" in sources:
+        print(
+            "Note: some Claude catalogs use Anthropic's public model table; "
+            "account access is not verified. Older cached models are retained.",
+            file=sys.stderr,
+        )
+    if "cached/bundled" in sources:
+        print(
+            "Warning: Claude model discovery is unavailable; using saved/bundled models. "
+            "Run cam index again when online.",
+            file=sys.stderr,
+        )
     return models
 
 
@@ -170,7 +191,7 @@ def load_key_catalog(key_id: str) -> list[dict[str, Any]]:
 
 
 def refresh_all_catalogs() -> list[dict[str, Any]]:
-    models = account_models() + anthropic_api_models()
+    models = account_models(refresh=True) + anthropic_api_models()
     for entry in list_keys():
         if entry.get("provider") in {"openrouter", "google", "huggingface"}:
             models.extend(refresh_key_catalog(str(entry["id"])))
@@ -178,13 +199,13 @@ def refresh_all_catalogs() -> list[dict[str, Any]]:
 
 
 def refresh_select_catalogs() -> list[dict[str, Any]]:
-    """Refresh key-filtered OpenRouter catalogs and load every other route.
+    """Refresh subscriptions and key-filtered OpenRouter/HF catalogs.
 
     Selection must not offer stale OpenRouter routes because the effective
     model allowlist can change when a key's guardrails change. Other provider
     catalogs retain their existing explicit refresh behavior.
     """
-    models = account_models() + anthropic_api_models()
+    models = account_models(refresh=True) + anthropic_api_models()
     for entry in list_keys():
         key_id = str(entry["id"])
         if entry.get("provider") in {"openrouter", "huggingface"}:

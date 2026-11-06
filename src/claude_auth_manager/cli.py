@@ -170,7 +170,9 @@ def parser() -> argparse.ArgumentParser:
     account_use = account_commands.add_parser(
         "use",
         help="switch Claude's native/default login",
-        description="Switch the saved native account used by /usage after closing native sessions.",
+        description=(
+            "Choose the native account for new Claude sessions; existing sessions may cache it."
+        ),
     )
     account_use.add_argument("name", help="saved full-login account ID, email, or label")
     account_add = account_commands.add_parser(
@@ -248,7 +250,7 @@ def parser() -> argparse.ArgumentParser:
     index = commands.add_parser(
         "index",
         help="refresh model catalogs",
-        description="Refresh credential-scoped model catalogs for provider keys.",
+        description="Refresh subscription and provider-key catalogs without inference calls.",
     )
     index.add_argument("--key", help="refresh only this named provider key")
     index.add_argument("--json", action="store_true", help="emit indexed models as JSON")
@@ -784,11 +786,10 @@ def _bootstrap_account(account_id: str) -> bool:
     """Configure a usable default route when the first account is added."""
     if favorite_models():
         return False
-    selected = [
-        model
-        for model in account_models()
-        if model.get("credential") == account_id and model.get("id") == "claude-sonnet-5"
-    ]
+    available = [model for model in account_models() if model.get("credential") == account_id]
+    selected = next(
+        ([model] for model in available if model["id"].startswith("claude-sonnet-")), available[:1]
+    )
     if not selected:
         raise RuntimeError(f"could not create a default route for Claude account {account_id}")
     preferences = load_preferences()
@@ -818,7 +819,8 @@ def command_account(args: argparse.Namespace) -> int:
         from .native import use_account
 
         account_id = use_account(args.name)
-        print(f"Native account: {account_id}. Reopen Claude for /usage to use this login.")
+        print(f"Default account for new Claude sessions: {account_id}.")
+        print("Open a new Claude session for /usage to reliably use this login.")
         print("CAM model routes are unchanged; a private recovery snapshot was retained.")
     elif args.account_command == "remove":
         account_id = normalize_id(args.name)

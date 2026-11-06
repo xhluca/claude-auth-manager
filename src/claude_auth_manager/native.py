@@ -74,11 +74,7 @@ def use_account(name: str) -> str:
         source = _account_profile(account_id, entry)
         if source.resolve() == native:
             return account_id
-        if active_native_sessions(native):
-            raise RuntimeError(
-                "close Claude sessions using the native profile before switching its login; "
-                "managed /model switching remains hot"
-            )
+        running = active_native_sessions(native)
         oauth = _read_claude_oauth(source / ".credentials.json")
         if not oauth.get("refreshToken"):
             raise ValueError("native account switching requires a full login, not a setup token")
@@ -152,4 +148,13 @@ def use_account(name: str) -> str:
                     atomic_write_json(path, value)
             save_registry(registry)
             raise
+        if running:
+            print(
+                "Warning: default changed for new Claude sessions. Existing sessions are not "
+                "hot-switched: "
+                "they may keep cached credentials or reload the shared login. "
+                "Avoid /login or /logout in old sessions; reopen them for consistent /usage. "
+                "The previous account was saved privately.",
+                file=sys.stderr,
+            )
         return account_id

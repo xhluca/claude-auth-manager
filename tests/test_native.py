@@ -89,9 +89,20 @@ def test_switch_rolls_back_on_write_error(logins, monkeypatch):
     assert load_registry()["accounts"]["one"]["source"] == "native"
 
 
-def test_running_native_sessions_block_switch_without_changes(logins, monkeypatch):
-    previous = deepcopy(load_registry())
+def test_running_native_sessions_warn_but_switch_and_preserve_old_account(
+    logins, monkeypatch, capsys
+):
     monkeypatch.setattr(native, "active_native_sessions", lambda _: True)
-    with pytest.raises(RuntimeError, match="close Claude sessions"):
-        native.use_account("two")
-    assert load_registry() == previous
+    assert native.use_account("two") == "two"
+    assert load_registry()["accounts"]["one"]["source"] == "managed"
+    assert (
+        read_json_object(logins / ".credentials.json")["claudeAiOauth"]["accessToken"] == "test-two"
+    )
+    assert (
+        read_json_object(account_config_dir("one") / ".credentials.json")["claudeAiOauth"][
+            "accessToken"
+        ]
+        == "test-one"
+    )
+    assert "Existing sessions are not hot-switched" in capsys.readouterr().err
+    assert read_json_object(logins / "settings.json") == {"model": "do-not-change"}

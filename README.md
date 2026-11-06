@@ -50,7 +50,7 @@ uv tool install claude-auth-manager
 cam account add --current
 ```
 
-For a pinned installation: `uv tool install 'claude-auth-manager==0.0.6'`.
+For a pinned installation: `uv tool install 'claude-auth-manager==0.0.7'`.
 Ensure `~/.local/bin` is on your PATH (`uv tool update-shell` can help for uv installs).
 
 ### Update, reset, and uninstall
@@ -104,9 +104,31 @@ The first command registers the current login; the second signs in to another
 account without replacing it. Names default to the authenticated email. Select
 account-specific models in Claude's `/model` picker to hot-switch chat routing.
 Use `cam check --account` for saved-account usage metadata. For native `/usage`,
-use `cam account use ACCOUNT` after closing native sessions (Linux full logins only).
+use `cam account use ACCOUNT` (Linux full logins only). It selects the default for
+new sessions and warns when Claude is already running.
 See [account setup](#add-accounts-and-keys) and
 [classifier accounts](#native-sonnet--permission-classifier-accounts) for details.
+
+Subscription models refresh automatically when you run `cam select`, `cam index`,
+`cam search`, or `cam list --model` without `--offline`. CAM first queries
+Anthropic's Models API with each account's credentials. If that is unavailable,
+it reads Anthropic's official public model table and labels results with
+`catalog_source: public` in model JSON; public listings do not confirm your
+subscription's entitlement. Older known models are retained in this fallback.
+The last successful catalog is saved for offline use; a complete discovery
+failure warns and uses the cache (or the bundled list on first use).
+
+```sh
+cam index
+cam list --model --account primary@example.com opus --json
+cam select
+# Saved catalogs only, with no model-discovery requests:
+cam list --model --account primary@example.com --offline
+```
+
+This discovers newly released models such as Opus 5.5 without a new CAM release.
+It makes no inference requests and never adds discovered models to your favorites
+until you select them. API-key Claude catalogs currently retain their bundled list.
 
 ### OpenRouter
 
@@ -267,8 +289,10 @@ cam check
 `cam select` refreshes every OpenRouter key through OpenRouter's authenticated,
 guardrail-filtered model endpoint before resolving or displaying routes. This
 also updates models added or removed since the key was first indexed. A failed
-refresh aborts selection instead of trusting stale access. Other providers keep
-their explicit `cam index` refresh behavior. Then select any mixture of accounts
+refresh aborts selection instead of trusting stale access. Claude subscriptions
+also refresh, with official-public-table and offline-cache fallbacks described
+above; Hugging Face refreshes its free routes. Google retains its explicit
+`cam index` refresh behavior. Then select any mixture of accounts
 and keys:
 
 ```sh
@@ -499,7 +523,7 @@ cam list --classifier [--json]
 - No view flag — list non-secret metadata for all saved accounts and provider keys.
 - `--account` without `--model` — list only Claude subscription accounts.
 - `--key` without `--model` — list only provider API keys.
-- `--model` — statically list available credential-scoped model routes; refreshes each OpenRouter key's current guardrail-filtered catalog first.
+- `--model` — statically list available credential-scoped model routes; refreshes subscription discovery and each OpenRouter/HF key's catalog first.
 - `QUERY...` — with `--model`, filter IDs, names, descriptions, providers, and source names using case-insensitive terms or glob patterns; any query may match.
 - `--model --account` — list models across all Claude subscriptions; add `ACCOUNT` to select one account by ID, email, or label.
 - `--model --key` — list models across all API keys; add `KEY` to select one key by ID or label.
@@ -520,9 +544,12 @@ metadata.
 ### `cam account`
 
 `cam account use ACCOUNT` switches the native/default full login used by Claude's
-`/usage`, not the selected routed chat model. Close Claude sessions using that
-native profile first, then reopen Claude after switching. CAM refuses to replace
-credentials underneath a running native session. Saved model routes and classifier
+`/usage`, not the selected routed chat model. The change selects the default for
+new Claude sessions. When native sessions are already running, CAM warns instead
+of blocking the switch. Existing sessions are not hot-switched: they may keep
+cached credentials or reload the shared login. This is not strict isolation of
+old sessions; open a new session for consistent `/usage` and avoid `/login` or
+`/logout` in old ones. Saved model routes and classifier
 chains remain unchanged; the outgoing native login becomes a managed account.
 A private recovery snapshot is kept in CAM's state directory. This command
 currently supports Linux file-backed OAuth logins, not setup tokens or macOS Keychain.
@@ -575,7 +602,7 @@ validates the credential and immediately indexes the models available through it
 cam index [--key NAME] [--json]
 ```
 
-- No `--key` — refresh every saved provider-key catalog and include subscription routes.
+- No `--key` — refresh subscription discovery and every saved provider-key catalog.
 - `--key NAME` — refresh only the catalog belonging to that named provider key.
 - `--json` — emit indexed model metadata as JSON instead of a table.
 
