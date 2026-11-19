@@ -68,6 +68,13 @@ def _systemd_available() -> bool:
     systemctl = shutil.which("systemctl")
     if not systemctl:
         return False
+    # systemctl also exits 1 when it cannot reach the user bus (SSH or batch
+    # sessions without a login manager), so require a reachable bus first.
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS") and not (
+        runtime and Path(runtime, "bus").exists()
+    ):
+        return False
     result = subprocess.run(
         [systemctl, "--user", "is-system-running"],
         stdout=subprocess.DEVNULL,

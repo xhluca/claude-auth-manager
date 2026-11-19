@@ -167,3 +167,68 @@ def test_startup_failure_includes_router_log(isolated_home, monkeypatch) -> None
 
     with pytest.raises(RuntimeError, match="address already in use"):
         service.start_service(9417)
+
+
+def _fake_systemctl(monkeypatch, returncode: int) -> list[list[str]]:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        service.shutil,
+        "which",
+        lambda name: "/bin/systemctl" if name == "systemctl" else None,
+    )
+    monkeypatch.setattr(
+        service.subprocess,
+        "run",
+        lambda command, **_kwargs: (
+            calls.append(command)
+            or subprocess.CompletedProcess(command, returncode, "", "")
+        ),
+    )
+    return calls
+
+
+def test_systemd_unavailable_without_user_bus(
+    isolated_home, monkeypatch, tmp_path
+) -> None:
+    calls = _fake_systemctl(monkeypatch, 1)
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    assert service._systemd_available() is False
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    assert service._systemd_available() is False
+    assert calls == []
+
+
+def test_start_service_uses_fallback_without_user_bus(
+    isolated_home, monkeypatch
+) -> None:
+    _fake_systemctl(monkeypatch, 1)
+    monkeypatch.setattr(service.sys, "platform", "linux")
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    monkeypatch.setattr(
+        service,
+        "_start_systemd",
+        lambda _port: pytest.fail("systemd must not be used without a user bus"),
+    )
+    monkeypatch.setattr(service, "_start_fallback", lambda _port: "background process")
+    monkeypatch.setattr(service, "healthcheck", lambda *_args, **_kwargs: True)
+
+    assert service.start_service(9417) == "background process"
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_systemd_available_with_user_bus(
+    isolated_home, monkeypatch, tmp_path, returncode
+) -> None:
+    calls = _fake_systemctl(monkeypatch, returncode)
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    (tmp_path / "bus").touch()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    assert service._systemd_available() is True
+
+    monkeypatch.delenv("XDG_RUNTIME_DIR")
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
+    assert service._systemd_available() is True
+    assert calls[-1] == ["/bin/systemctl", "--user", "is-system-running"]
